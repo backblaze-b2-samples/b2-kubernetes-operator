@@ -207,6 +207,10 @@ func (r *BucketReconciler) observeOrCreate(ctx context.Context, acct *provider.A
 			return nil, false, false, waitFor(b2v1.ReasonBucketOwnedElsewhere, 10*time.Minute,
 				"bucket %q is managed by another resource (owner UID %s); remove bucketInfo key %q from the bucket to release it",
 				bkt.Spec.BucketName, owner, OwnerInfoKey)
+		case observed.BucketInfo[ReleasedInfoKey] != "" && observed.BucketInfo[ReleasedInfoKey] != bkt.Namespace:
+			return nil, false, false, waitFor(b2v1.ReasonBucketOwnedElsewhere, 10*time.Minute,
+				"bucket %q was released by namespace %s; a cluster administrator must remove bucketInfo key %q before another namespace can adopt it",
+				bkt.Spec.BucketName, observed.BucketInfo[ReleasedInfoKey], ReleasedInfoKey)
 		case !bkt.Spec.AdoptExisting:
 			return nil, false, false, waitFor(b2v1.ReasonBucketExists, 10*time.Minute,
 				"bucket %q already exists in the account; set spec.adoptExisting: true to manage it", bkt.Spec.BucketName)
@@ -369,6 +373,16 @@ func (r *BucketReconciler) finalize(ctx context.Context, bkt *b2v1.Bucket) (ctrl
 	}
 
 	if observed != nil && observed.BucketInfo[OwnerInfoKey] == string(bkt.UID) {
+		// Keys scoped to the bucket are revoked before it is released or
+		// deleted, so no credentials outlive the resource that granted them.
+		var keys b2v1.ApplicationKeyList
+		if err := r.Client.List(ctx, &keys, client.InNamespace(bkt.Namespace), client.MatchingFields{indexBucketRef: bkt.Name}); err != nil {
+			return ctrl.Result{}, err
+		}
+		if n := len(keys.Items); n > 0 {
+			return fail(waitFor(b2v1.ReasonDeletionBlocked, time.Minute,
+				"%d ApplicationKey(s) still reference this bucket (e.g. %s); delete them first", n, keys.Items[0].Name))
+		}
 		deleteBucket := bkt.Spec.DeletionPolicy == b2v1.DeletionPolicyDelete
 		if deleteBucket {
 			if se := r.checkPolicy(ctx, bkt, false); se != nil {
@@ -387,10 +401,11 @@ func (r *BucketReconciler) finalize(ctx context.Context, bkt *b2v1.Bucket) (ctrl
 			r.Recorder.Eventf(bkt, nil, corev1.EventTypeNormal, "Deleted", "Delete", "Deleted bucket %s", bkt.Spec.BucketName)
 		} else {
 			info := maps.Clone(observed.BucketInfo)
-			delete(info, OwnerInfoKey)
 			if info == nil {
 				info = map[string]string{}
 			}
+			delete(info, OwnerInfoKey)
+			info[ReleasedInfoKey] = bkt.Namespace
 			_, err := acct.Client.UpdateBucket(ctx, b2.UpdateBucketRequest{BucketID: observed.BucketID, BucketInfo: &info, IfRevisionIs: observed.Revision})
 			if err != nil && !b2.HasCode(err, b2.CodeBadBucketID) {
 				if b2.HasCode(err, b2.CodeConflict) {
@@ -554,11 +569,26 @@ func (r *BucketReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.bucketsForProviderConfig),
 			builder.WithPredicates(readinessChanged())).
 		Watches(&b2v1.B2AccessPolicy{}, handler.EnqueueRequestsFromMapFunc(r.allBuckets)).
+		Watches(&b2v1.ApplicationKey{}, handler.EnqueueRequestsFromMapFunc(referencedBucket),
+			builder.WithPredicates(predicate.Funcs{
+				CreateFunc: func(event.CreateEvent) bool { return false },
+				UpdateFunc: func(event.UpdateEvent) bool { return false },
+			})).
 		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.bucketsInNamespace),
 			builder.WithPredicates(predicate.LabelChangedPredicate{})).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
 		Named("bucket").
 		Complete(r)
+}
+
+// referencedBucket maps a deleted ApplicationKey to its Bucket, which may be
+// waiting for its keys to go before it can be deleted.
+func referencedBucket(_ context.Context, o client.Object) []reconcile.Request {
+	k, ok := o.(*b2v1.ApplicationKey)
+	if !ok || k.Spec.BucketRef == nil {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: k.Namespace, Name: k.Spec.BucketRef.Name}}}
 }
 
 func (r *BucketReconciler) bucketsForProviderConfig(ctx context.Context, o client.Object) []reconcile.Request {

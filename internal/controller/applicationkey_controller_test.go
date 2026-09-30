@@ -108,7 +108,7 @@ func TestKeyWaitsForBucket(t *testing.T) {
 	ns := newNamespace(t, true)
 	key := newKey(ns, "early", "later", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonBucketNotReady)
+	eventuallyReason(g, key, keyConds(key), b2v1.ReasonBucketNotFound)
 
 	readyBucket(g, ns, "later")
 	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
@@ -266,7 +266,10 @@ func TestKeyRevokedWhenPolicyNoLongerAllowsIt(t *testing.T) {
 	delete(nsObj.Labels, tenantLabel)
 	g.Expect(k8s.Update(ctx, &nsObj)).To(Succeed())
 
+	// Revocation is scheduled, not immediate: the key survives a brief gap.
 	eventuallyReason(g, key, keyConds(key), b2v1.ReasonPolicyDenied)
+	g.Expect(key.Status.ScheduledRevocation).NotTo(BeNil())
+	g.Expect(fakeB2.Key(id)).NotTo(BeNil(), "key must not be revoked before the grace period")
 	g.Eventually(func() *b2.ApplicationKey { return fakeB2.Key(id) }, timeout, poll).Should(BeNil())
 	g.Eventually(func() bool {
 		return apierrors.IsNotFound(k8s.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &corev1.Secret{}))
@@ -285,10 +288,10 @@ func TestKeyOrphanFromLostCreateResponseIsRevoked(t *testing.T) {
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
 	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
 
-	prefix := keyName(key, 1)
+	prefix := KeyNamePrefix + "-" + testClusterID + "-" + uid8(key.UID) + "-"
 	var ours []string
 	for _, k := range fakeB2.Keys() {
-		if strings.HasPrefix(k.KeyName, prefix[:len(prefix)-1]) {
+		if strings.HasPrefix(k.KeyName, prefix) {
 			ours = append(ours, k.ApplicationKeyID)
 		}
 	}
@@ -318,4 +321,88 @@ func TestKeyValidationRules(t *testing.T) {
 	ok.Spec.SecretName = "second"
 	err := k8s.Update(ctx, ok)
 	g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "secretName change: err = %v", err)
+}
+
+func TestKeyPolicyGapIsTolerated(t *testing.T) {
+	g := requireEnv(t)
+	ctx := context.Background()
+	ns := newNamespace(t, true)
+	readyBucket(g, ns, "gap")
+	key := newKey(ns, "app", "gap", "readFiles")
+	key.Spec.Rotation = &b2v1.KeyRotation{GracePeriod: &metav1.Duration{Duration: time.Hour}}
+	g.Expect(k8s.Create(ctx, key)).To(Succeed())
+	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	id := key.Status.KeyID
+
+	var nsObj corev1.Namespace
+	g.Expect(k8s.Get(ctx, client.ObjectKey{Name: ns}, &nsObj)).To(Succeed())
+	delete(nsObj.Labels, tenantLabel)
+	g.Expect(k8s.Update(ctx, &nsObj)).To(Succeed())
+	eventuallyReason(g, key, keyConds(key), b2v1.ReasonPolicyDenied)
+
+	nsObj.Labels[tenantLabel] = "true"
+	g.Expect(k8s.Update(ctx, &nsObj)).To(Succeed())
+	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	g.Expect(key.Status.KeyID).To(Equal(id), "the key must survive a policy gap shorter than its grace period")
+	g.Expect(key.Status.ScheduledRevocation).To(BeNil())
+	g.Expect(fakeB2.Key(id)).NotTo(BeNil())
+}
+
+func TestKeyRecoveredAfterInterruptedCreate(t *testing.T) {
+	g := requireEnv(t)
+	ctx := context.Background()
+	ns := newNamespace(t, true)
+	readyBucket(g, ns, "recover")
+	key := newKey(ns, "app", "recover", "readFiles")
+	g.Expect(k8s.Create(ctx, key)).To(Succeed())
+	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	id := key.Status.KeyID
+
+	// Simulate the operator stopping after writing the Secret but before
+	// recording the new key in status.
+	base := key.DeepCopy()
+	key.Status.PendingKeyName = key.Status.KeyName
+	key.Status.KeyID = ""
+	g.Expect(k8s.Status().Patch(ctx, key, client.MergeFrom(base))).To(Succeed())
+	touch(g, key)
+
+	g.Eventually(func(g Gomega) {
+		g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(key), key)).To(Succeed())
+		g.Expect(key.Status.PendingKeyName).To(BeEmpty())
+		g.Expect(key.Status.KeyID).To(Equal(id))
+	}, timeout, poll).Should(Succeed())
+	g.Expect(fakeB2.Key(id)).NotTo(BeNil(), "the delivered key must be recovered, not revoked")
+	g.Expect(string(getSecret(g, ns, "app").Data[b2v1.SecretKeyB2KeyID])).To(Equal(id))
+}
+
+func TestSweepRevokesKeysOfForceDeletedResources(t *testing.T) {
+	g := requireEnv(t)
+	ctx := context.Background()
+	ns := newNamespace(t, true)
+	readyBucket(g, ns, "sweep")
+	key := newKey(ns, "app", "sweep", "readFiles")
+	g.Expect(k8s.Create(ctx, key)).To(Succeed())
+	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	id := key.Status.KeyID
+	other := fakeB2.Keys() // keys of live resources and foreign keys must survive
+
+	// A tenant strips the finalizer and deletes the resource.
+	base := key.DeepCopy()
+	key.Finalizers = nil
+	g.Expect(k8s.Patch(ctx, key, client.MergeFrom(base))).To(Succeed())
+	g.Expect(k8s.Delete(ctx, key)).To(Succeed())
+	g.Eventually(func() bool {
+		return apierrors.IsNotFound(k8s.Get(ctx, client.ObjectKeyFromObject(key), &b2v1.ApplicationKey{}))
+	}, timeout, poll).Should(BeTrue())
+	g.Expect(fakeB2.Key(id)).NotTo(BeNil())
+	foreignID, _ := fakeB2.AddKey("b2op-othrclst-deadbeef-1-x-y", []string{"readFiles"}, nil, "")
+
+	g.Expect(sweeper.Sweep(ctx)).To(Succeed())
+	g.Expect(fakeB2.Key(id)).To(BeNil(), "orphaned key must be revoked")
+	g.Expect(fakeB2.Key(foreignID)).NotTo(BeNil(), "another cluster's key must not be touched")
+	for _, k := range other {
+		if k.ApplicationKeyID != id {
+			g.Expect(fakeB2.Key(k.ApplicationKeyID)).NotTo(BeNil(), "key %s of a live resource was revoked", k.KeyName)
+		}
+	}
 }

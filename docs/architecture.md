@@ -54,6 +54,8 @@ On `Retain` deletion the key is removed, so the bucket can be adopted again late
 
 If the operator stops between creating a key and recording it, `pendingKeyName` remains set. The next reconcile confirms its view is current with an uncached read, lists keys with that name, and revokes the ones that were never recorded.
 
+If the operator stops after writing the Secret but before recording the key, the Secret already holds a key under the pending name. That key is adopted as current rather than revoked; the spec hash and creation time are read from the Secret's annotations.
+
 A key that no longer exists in B2 (`b2_delete_key` returns 400 and `b2_list_keys` does not find it) is treated as already revoked.
 
 ## B2 client behavior

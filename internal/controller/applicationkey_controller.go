@@ -33,6 +33,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,6 +54,8 @@ import (
 const (
 	annotationKeyID     = "b2.backblaze.com/key-id"
 	annotationExpiresAt = "b2.backblaze.com/expires-at"
+	annotationSpecHash  = "b2.backblaze.com/spec-hash"
+	annotationCreatedAt = "b2.backblaze.com/created-at"
 	labelApplicationKey = "b2.backblaze.com/application-key"
 
 	defaultGracePeriod = 15 * time.Minute
@@ -138,6 +141,9 @@ func (r *ApplicationKeyReconciler) reconcile(ctx context.Context, key *b2v1.Appl
 	// ready (for example because the same policy change denied the bucket).
 	target, bkt, se := r.targetFromSpec(ctx, key)
 	if se != nil {
+		if se.reason == b2v1.ReasonBucketNotFound && key.Status.KeyID != "" {
+			return r.denied(ctx, acct, key, se.message, setReady, nil)
+		}
 		return result(se, setReady)
 	}
 
@@ -146,19 +152,23 @@ func (r *ApplicationKeyReconciler) reconcile(ctx context.Context, key *b2v1.Appl
 		return result(&stageError{reason: b2v1.ReasonPolicyDenied, message: err.Error(), err: err}, setReady)
 	}
 	if !d.Allowed {
-		if r.Options.RevokeOnPolicyViolation && key.Status.KeyID != "" {
-			if err := r.revokeAll(ctx, acct, key); err != nil {
-				return result(providerError("revoking key that policy no longer allows", err), setReady)
-			}
-			if err := r.deleteOwnedSecret(ctx, key); err != nil {
-				return ctrl.Result{}, err
-			}
-			r.Recorder.Eventf(key, nil, corev1.EventTypeWarning, "Revoked", "Revoke", "Revoked the key because no B2AccessPolicy allows it any more")
-		}
-		return result(&stageError{reason: b2v1.ReasonPolicyDenied, message: d.Reason}, setReady)
+		return r.denied(ctx, acct, key, d.Reason, setReady, func() (bool, error) {
+			// Confirm against the API server so cache lag or a policy being
+			// replaced cannot revoke keys.
+			fresh := &policy.Evaluator{Reader: r.APIReader, AllowKeyManagement: r.Policy.AllowKeyManagement}
+			d, err := fresh.CheckKey(ctx, keyPolicyRequest(key, target))
+			return !d.Allowed, err
+		})
 	}
-	if se := r.resolveBucketID(ctx, acct, bkt, &target); se != nil {
+	if se := r.resolveBucketID(ctx, acct, key, bkt, &target); se != nil {
+		if se.reason == b2v1.ReasonPolicyDenied {
+			return r.denied(ctx, acct, key, se.message, setReady, nil)
+		}
 		return result(se, setReady)
+	}
+	if key.Status.ScheduledRevocation != nil {
+		r.Recorder.Eventf(key, nil, corev1.EventTypeNormal, "RevocationCancelled", "Reconcile", "Access was restored; the key will not be revoked")
+		key.Status.ScheduledRevocation = nil
 	}
 
 	secretName := key.SecretNameOrDefault()
@@ -206,12 +216,12 @@ func (r *ApplicationKeyReconciler) targetFromSpec(ctx context.Context, key *b2v1
 		var bkt b2v1.Bucket
 		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: key.Spec.BucketRef.Name}, &bkt); err != nil {
 			if apierrors.IsNotFound(err) {
-				return keyTarget{}, nil, waitFor(b2v1.ReasonBucketNotReady, time.Minute, "Bucket %q not found in namespace %s", key.Spec.BucketRef.Name, key.Namespace)
+				return keyTarget{}, nil, waitFor(b2v1.ReasonBucketNotFound, time.Minute, "Bucket %q not found in namespace %s", key.Spec.BucketRef.Name, key.Namespace)
 			}
 			return keyTarget{}, nil, &stageError{reason: b2v1.ReasonBucketNotReady, message: err.Error(), err: err}
 		}
 		if bkt.Spec.ProviderConfigRef.ProviderConfigName() != key.Spec.ProviderConfigRef.ProviderConfigName() {
-			return keyTarget{}, nil, waitFor(b2v1.ReasonInvalidSpec, 0, "Bucket %q uses provider config %q, but the key uses %q",
+			return keyTarget{}, nil, waitFor(b2v1.ReasonInvalidSpec, 5*time.Minute, "Bucket %q uses provider config %q, but the key uses %q",
 				bkt.Name, bkt.Spec.ProviderConfigRef.ProviderConfigName(), key.Spec.ProviderConfigRef.ProviderConfigName())
 		}
 		return keyTarget{bucketName: bkt.Spec.BucketName}, &bkt, nil
@@ -222,8 +232,11 @@ func (r *ApplicationKeyReconciler) targetFromSpec(ctx context.Context, key *b2v1
 }
 
 // resolveBucketID fills in the B2 bucket ID, waiting for a referenced Bucket
-// to be ready or looking up an external bucket.
-func (r *ApplicationKeyReconciler) resolveBucketID(ctx context.Context, acct *provider.Account, bkt *b2v1.Bucket, t *keyTarget) *stageError {
+// to be ready or looking up an external bucket. An external bucket that is
+// managed by (or was released from) another namespace is refused with
+// ReasonPolicyDenied, whatever the name patterns say: patterns such as
+// "acme-{namespace}-*" also match names of namespaces that share a prefix.
+func (r *ApplicationKeyReconciler) resolveBucketID(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, bkt *b2v1.Bucket, t *keyTarget) *stageError {
 	switch {
 	case bkt != nil:
 		if !bkt.DeletionTimestamp.IsZero() || bkt.Status.BucketID == "" || !meta.IsStatusConditionTrue(bkt.Status.Conditions, b2v1.ConditionReady) {
@@ -238,9 +251,63 @@ func (r *ApplicationKeyReconciler) resolveBucketID(ctx context.Context, acct *pr
 		if b == nil {
 			return waitFor(b2v1.ReasonBucketNotFound, 5*time.Minute, "bucket %q does not exist in the B2 account", t.bucketName)
 		}
+		if rel := b.BucketInfo[ReleasedInfoKey]; rel != "" && rel != key.Namespace {
+			return waitFor(b2v1.ReasonPolicyDenied, 10*time.Minute, "bucket %q was released by namespace %s", t.bucketName, rel)
+		}
+		if owner := b.BucketInfo[OwnerInfoKey]; owner != "" {
+			var local b2v1.BucketList
+			if err := r.Client.List(ctx, &local, client.InNamespace(key.Namespace)); err != nil {
+				return &stageError{reason: b2v1.ReasonProviderError, message: err.Error(), err: err}
+			}
+			if !slices.ContainsFunc(local.Items, func(b b2v1.Bucket) bool { return string(b.UID) == owner }) {
+				return waitFor(b2v1.ReasonPolicyDenied, 10*time.Minute, "bucket %q is managed by a Bucket outside namespace %s", t.bucketName, key.Namespace)
+			}
+		}
 		t.bucketID = b.BucketID
 	}
 	return nil
+}
+
+// denied handles a key that is no longer allowed. Its current key is revoked
+// (and Secret deleted) only after the key's grace period, and only if confirm
+// (when set) still reports a denial against uncached data, so a momentary
+// gap such as a policy being replaced does not break workloads.
+func (r *ApplicationKeyReconciler) denied(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, reason string,
+	setReady func(string, string), confirm func() (bool, error)) (ctrl.Result, error) {
+	if !r.Options.RevokeOnPolicyViolation || key.Status.KeyID == "" {
+		return result(&stageError{reason: b2v1.ReasonPolicyDenied, message: reason}, setReady)
+	}
+	now := r.now()
+	if key.Status.ScheduledRevocation == nil {
+		at := metav1.NewTime(now.Add(r.gracePeriod(key)))
+		key.Status.ScheduledRevocation = &at
+		r.Recorder.Eventf(key, nil, corev1.EventTypeWarning, "RevocationScheduled", "Reconcile",
+			"Key %s is no longer allowed and will be revoked at %s unless access is restored: %s", key.Status.KeyID, at.UTC().Format(time.RFC3339), reason)
+	}
+	at := key.Status.ScheduledRevocation.Time
+	if now.Before(at) {
+		return result(waitFor(b2v1.ReasonPolicyDenied, max(at.Sub(now), time.Second),
+			"%s; key %s will be revoked at %s unless access is restored", reason, key.Status.KeyID, at.UTC().Format(time.RFC3339)), setReady)
+	}
+	if confirm != nil {
+		stillDenied, err := confirm()
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !stillDenied {
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+	}
+	revoked := key.Status.KeyID
+	if err := r.revokeAll(ctx, acct, key); err != nil {
+		return result(providerError("revoking a key that is no longer allowed", err), setReady)
+	}
+	if err := r.deleteOwnedSecret(ctx, key); err != nil {
+		return ctrl.Result{}, err
+	}
+	key.Status.ScheduledRevocation = nil
+	r.Recorder.Eventf(key, nil, corev1.EventTypeWarning, "Revoked", "Revoke", "Revoked key %s: %s", revoked, reason)
+	return result(&stageError{reason: b2v1.ReasonPolicyDenied, message: reason}, setReady)
 }
 
 // isFresh reports whether key matches the latest version in the API server.
@@ -282,7 +349,7 @@ func (r *ApplicationKeyReconciler) getOwnedSecret(ctx context.Context, key *b2v1
 		return nil, &stageError{reason: b2v1.ReasonProviderError, message: fmt.Sprintf("reading Secret %s: %v", name, err), err: err}
 	}
 	if !metav1.IsControlledBy(&s, key) {
-		return nil, waitFor(b2v1.ReasonSecretConflict, 0, "Secret %q already exists and is not owned by this ApplicationKey; delete it or set spec.secretName", name)
+		return nil, waitFor(b2v1.ReasonSecretConflict, 5*time.Minute, "Secret %q already exists and is not owned by this ApplicationKey; delete it or set spec.secretName", name)
 	}
 	return &s, nil
 }
@@ -331,7 +398,7 @@ func (r *ApplicationKeyReconciler) createAndSwap(ctx context.Context, acct *prov
 
 	// Record the name before creating so a crash cannot orphan the key.
 	key.Status.Serial++
-	name := keyName(key, key.Status.Serial)
+	name := r.keyName(key, key.Status.Serial)
 	key.Status.PendingKeyName = name
 	if err := patchStatus(ctx, r.Client, key, *orig); err != nil {
 		return &stageError{reason: b2v1.ReasonReconciling, message: fmt.Sprintf("recording pending key: %v", err), err: err}
@@ -351,8 +418,10 @@ func (r *ApplicationKeyReconciler) createAndSwap(ctx context.Context, acct *prov
 	}
 	created, err := acct.Client.CreateKey(ctx, req)
 	if err != nil {
-		if apiErr, ok := b2.AsAPIError(err); ok && apiErr.Status < 500 {
-			// A definite rejection: nothing was created.
+		if apiErr, ok := b2.AsAPIError(err); ok && (apiErr.Status == 400 || apiErr.Status == 401 || apiErr.Status == 403) {
+			// A definite rejection: nothing was created. Timeouts (408),
+			// throttling (429) and server errors are ambiguous, so the
+			// pending name is kept for orphan cleanup.
 			key.Status.PendingKeyName = ""
 		}
 		switch {
@@ -364,7 +433,7 @@ func (r *ApplicationKeyReconciler) createAndSwap(ctx context.Context, acct *prov
 		return providerError("creating application key", err)
 	}
 
-	if err := r.writeSecret(ctx, acct, key, secret, t, created); err != nil {
+	if err := r.writeSecret(ctx, acct, key, secret, t, created, specHash); err != nil {
 		if rerr := acct.Client.DeleteKey(ctx, created.ApplicationKeyID); rerr == nil {
 			key.Status.PendingKeyName = ""
 		}
@@ -403,9 +472,13 @@ func (r *ApplicationKeyReconciler) createAndSwap(ctx context.Context, acct *prov
 	return nil
 }
 
-func (r *ApplicationKeyReconciler) writeSecret(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, existing *corev1.Secret, t keyTarget, k *b2.ApplicationKey) error {
+func (r *ApplicationKeyReconciler) writeSecret(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, existing *corev1.Secret, t keyTarget, k *b2.ApplicationKey, specHash string) error {
 	data := secretData(acct, key, t, []byte(k.ApplicationKeyID), []byte(k.ApplicationKey))
-	annotations := map[string]string{annotationKeyID: k.ApplicationKeyID}
+	annotations := map[string]string{
+		annotationKeyID:     k.ApplicationKeyID,
+		annotationSpecHash:  specHash,
+		annotationCreatedAt: r.now().UTC().Format(time.RFC3339),
+	}
 	if k.ExpirationTimestamp != nil {
 		annotations[annotationExpiresAt] = time.UnixMilli(*k.ExpirationTimestamp).UTC().Format(time.RFC3339)
 	}
@@ -430,7 +503,10 @@ func (r *ApplicationKeyReconciler) writeSecret(ctx context.Context, acct *provid
 // syncSecret keeps the non-credential parts of an existing Secret current.
 func (r *ApplicationKeyReconciler) syncSecret(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, s *corev1.Secret, t keyTarget) error {
 	want := s.DeepCopy()
-	annotations := map[string]string{annotationKeyID: key.Status.KeyID}
+	annotations := map[string]string{annotationKeyID: key.Status.KeyID, annotationSpecHash: key.Status.SpecHash}
+	if key.Status.CreatedAt != nil {
+		annotations[annotationCreatedAt] = key.Status.CreatedAt.UTC().Format(time.RFC3339)
+	}
 	if key.Status.ExpiresAt != nil {
 		annotations[annotationExpiresAt] = key.Status.ExpiresAt.UTC().Format(time.RFC3339)
 	}
@@ -475,8 +551,10 @@ func applySecretMeta(s *corev1.Secret, key *b2v1.ApplicationKey, annotations map
 	s.Annotations = anns
 }
 
-// revokeOrphans deletes keys created under status.pendingKeyName that were
-// never recorded as current.
+// revokeOrphans resolves keys created under status.pendingKeyName that were
+// never recorded as current. A key that already reached the Secret (the
+// operator stopped after writing the Secret but before recording status) is
+// adopted as the current key; any other is revoked.
 func (r *ApplicationKeyReconciler) revokeOrphans(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey) error {
 	pending := key.Status.PendingKeyName
 	orphans, err := acct.Client.FindKeys(ctx, func(k b2.ApplicationKey) bool {
@@ -485,7 +563,19 @@ func (r *ApplicationKeyReconciler) revokeOrphans(ctx context.Context, acct *prov
 	if err != nil {
 		return err
 	}
+	var delivered corev1.Secret
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: key.SecretNameOrDefault()}, &delivered); client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	deliveredID := ""
+	if metav1.IsControlledBy(&delivered, key) {
+		deliveredID = string(delivered.Data[b2v1.SecretKeyB2KeyID])
+	}
 	for _, k := range orphans {
+		if k.ApplicationKeyID == deliveredID {
+			r.adoptDeliveredKey(key, &k, &delivered)
+			continue
+		}
 		if err := r.deleteKey(ctx, acct, k.ApplicationKeyID); err != nil {
 			return err
 		}
@@ -493,6 +583,34 @@ func (r *ApplicationKeyReconciler) revokeOrphans(ctx context.Context, acct *prov
 	}
 	key.Status.PendingKeyName = ""
 	return nil
+}
+
+func (r *ApplicationKeyReconciler) adoptDeliveredKey(key *b2v1.ApplicationKey, k *b2.ApplicationKey, s *corev1.Secret) {
+	now := r.now()
+	if old := key.Status.KeyID; old != "" {
+		key.Status.RetiringKeys = append(key.Status.RetiringKeys, b2v1.RetiringKey{KeyID: old, RevokeAfter: metav1.NewTime(now.Add(r.gracePeriod(key)))})
+	}
+	created := metav1.NewTime(now)
+	if t, err := time.Parse(time.RFC3339, s.Annotations[annotationCreatedAt]); err == nil {
+		created = metav1.NewTime(t)
+	}
+	key.Status.KeyID = k.ApplicationKeyID
+	key.Status.KeyName = k.KeyName
+	key.Status.SpecHash = s.Annotations[annotationSpecHash]
+	key.Status.SecretName = s.Name
+	key.Status.CreatedAt = &created
+	key.Status.LastVerifiedTime = nil
+	key.Status.BucketID = ""
+	if len(k.BucketIDs) > 0 {
+		key.Status.BucketID = k.BucketIDs[0]
+	}
+	key.Status.BucketName = string(s.Data[b2v1.SecretKeyB2BucketName])
+	key.Status.ExpiresAt = nil
+	if k.ExpirationTimestamp != nil {
+		exp := metav1.NewTime(time.UnixMilli(*k.ExpirationTimestamp))
+		key.Status.ExpiresAt = &exp
+	}
+	r.Recorder.Eventf(key, nil, corev1.EventTypeNormal, "KeyRecovered", "Reconcile", "Recovered key %s that was delivered to Secret %s before an interruption", k.ApplicationKeyID, s.Name)
 }
 
 // revokeRetired deletes retiring keys whose grace period has passed and
@@ -655,18 +773,26 @@ func renewBefore(key *b2v1.ApplicationKey) time.Duration {
 	return min(key.Spec.ValidFor.Duration/3, maxRenewBefore)
 }
 
-// keyName builds a B2 key name (at most 100 of [A-Za-z0-9-]) that identifies
-// the resource and is unique per serial.
-func keyName(key *b2v1.ApplicationKey, serial int64) string {
-	base := strings.Trim(invalidKeyNameChars.ReplaceAllString(key.Namespace+"-"+key.Name, "-"), "-")
-	if len(base) > 70 {
-		base = strings.TrimRight(base[:70], "-")
+// keyName builds a B2 key name (at most 100 of [A-Za-z0-9-]):
+// b2op-<cluster>-<uid8>-<serial>-<namespace>-<name>. The fixed-format head
+// lets the orphan sweep attribute keys to this cluster and to a resource;
+// the tail is for humans reading the B2 console.
+func (r *ApplicationKeyReconciler) keyName(key *b2v1.ApplicationKey, serial int64) string {
+	head := fmt.Sprintf("%s-%s-%s-%d", KeyNamePrefix, r.Options.ClusterID, uid8(key.UID), serial)
+	tail := strings.Trim(invalidKeyNameChars.ReplaceAllString(key.Namespace+"-"+key.Name, "-"), "-")
+	if room := 100 - len(head) - 1; len(tail) > room {
+		tail = strings.TrimRight(tail[:room], "-")
 	}
-	uid := strings.ReplaceAll(string(key.UID), "-", "")
-	if len(uid) > 8 {
-		uid = uid[:8]
+	return head + "-" + tail
+}
+
+// uid8 is the first 8 hex characters of a UID.
+func uid8(uid types.UID) string {
+	u := strings.ReplaceAll(string(uid), "-", "")
+	if len(u) > 8 {
+		u = u[:8]
 	}
-	return fmt.Sprintf("%s-%s-%d", base, uid, serial)
+	return u
 }
 
 // keySpecHash identifies the B2-side properties of a key; a change means the

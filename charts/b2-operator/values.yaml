@@ -32,6 +32,13 @@ operator:
   # -- Allow policies to grant listKeys/writeKeys/deleteKeys. Keys holding
   # these can escalate to full account access; leave off unless required.
   allowKeyManagementCapabilities: false
+  # -- How often keys this cluster created for ApplicationKeys that no longer
+  # exist (e.g. finalizer removed by hand) are revoked. 0 disables.
+  orphanKeySweepInterval: 1h
+  # -- 8-character [a-z0-9] ID embedded in B2 key names. Must differ between
+  # clusters sharing a B2 account. Defaults to a prefix of the kube-system
+  # namespace UID.
+  clusterID: ""
   # -- Log level: debug, info, error.
   logLevel: info
   # -- Log encoding: json or console.
@@ -59,6 +66,11 @@ metrics:
     enabled: false
     interval: 1m
     labels: {}
+    # -- TLS settings for scraping. The operator serves a self-signed
+    # certificate by default; provide a CA (or cert-manager certificate) and
+    # replace this to verify it.
+    tlsConfig:
+      insecureSkipVerify: true
 
 resources:
   requests:

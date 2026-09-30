@@ -53,6 +53,8 @@ const (
 	poll    = 100 * time.Millisecond
 
 	tenantLabel      = "b2-test/tenant"
+	externalLabel    = "b2-test/external"
+	testClusterID    = "testclst"
 	operatorNS       = "b2-operator-system"
 	credsSecretName  = "b2-credentials"
 	testGracePeriod  = 2 * time.Second
@@ -63,6 +65,7 @@ const (
 var (
 	k8s     client.Client
 	fakeB2  *b2fake.Server
+	sweeper *KeySweeper
 	testCtx context.Context
 	skipMsg string
 )
@@ -120,8 +123,10 @@ func runSuite(m *testing.M) int {
 			KeyVerifyInterval:       testVerifyPeriod,
 			DefaultGracePeriod:      testGracePeriod,
 			RevokeOnPolicyViolation: true,
+			ClusterID:               testClusterID,
 		},
 	}
+	sweeper = &KeySweeper{Deps: deps, APIReader: mgr.GetAPIReader()}
 	must((&ClusterProviderConfigReconciler{Deps: deps}).SetupWithManager(mgr))
 	must((&BucketReconciler{Deps: deps}).SetupWithManager(mgr))
 	must((&ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
@@ -156,6 +161,18 @@ func seedCluster() error {
 			Spec: b2v1.ClusterProviderConfigSpec{
 				APIURL:               fakeB2.URL(),
 				CredentialsSecretRef: b2v1.CredentialsSecretReference{Namespace: operatorNS, Name: credsSecretName},
+			},
+		},
+		&b2v1.B2AccessPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "external"},
+			Spec: b2v1.B2AccessPolicySpec{
+				NamespaceSelector: metav1.LabelSelector{MatchLabels: map[string]string{externalLabel: "true"}},
+				ProviderConfigs:   []string{"default"},
+				Buckets:           b2v1.BucketPolicy{NamePatterns: []string{"{namespace}-*"}, AllowAdoption: true},
+				Keys: b2v1.KeyPolicy{
+					AllowedCapabilities:  []b2v1.Capability{"listFiles", "readFiles"},
+					AllowExternalBuckets: true,
+				},
 			},
 		},
 		&b2v1.B2AccessPolicy{
@@ -196,11 +213,16 @@ func newNamespace(t *testing.T, tenant bool) string {
 	t.Helper()
 	b := make([]byte, 3)
 	_, _ = rand.Read(b)
-	name := "t" + hex.EncodeToString(b)
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	labels := map[string]string{}
 	if tenant {
-		ns.Labels = map[string]string{tenantLabel: "true"}
+		labels[tenantLabel] = "true"
 	}
+	return createNamespace(t, "t"+hex.EncodeToString(b), labels)
+}
+
+func createNamespace(t *testing.T, name string, labels map[string]string) string {
+	t.Helper()
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
 	if err := k8s.Create(context.Background(), ns); err != nil {
 		t.Fatal(err)
 	}

@@ -18,9 +18,12 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -61,6 +64,8 @@ func main() {
 		allowKeyManagement, allowInsecureAPIURL      bool
 		revokeOnPolicyViolation                      bool
 		resyncPeriod, keyVerifyInterval, gracePeriod time.Duration
+		sweepInterval                                time.Duration
+		clusterID                                    string
 	)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "Address the metrics endpoint binds to; \"0\" disables it.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true, "Serve metrics over HTTPS with Kubernetes authn/authz.")
@@ -70,6 +75,8 @@ func main() {
 	flag.DurationVar(&resyncPeriod, "resync-period", 10*time.Minute, "How often resources are compared with B2 to detect drift.")
 	flag.DurationVar(&keyVerifyInterval, "key-verify-interval", time.Hour, "How often each application key is checked against B2.")
 	flag.DurationVar(&gracePeriod, "default-grace-period", 15*time.Minute, "How long a replaced key stays valid when the resource sets no gracePeriod.")
+	flag.DurationVar(&sweepInterval, "orphan-key-sweep-interval", time.Hour, "How often to revoke keys this cluster created for ApplicationKeys that no longer exist; 0 disables.")
+	flag.StringVar(&clusterID, "cluster-id", "", "8-character [a-z0-9] ID embedded in B2 key names to tell clusters sharing an account apart. Defaults to a prefix of the kube-system namespace UID.")
 	flag.BoolVar(&revokeOnPolicyViolation, "revoke-on-policy-violation", true, "Revoke existing keys that B2AccessPolicies no longer allow.")
 	flag.BoolVar(&allowKeyManagement, "allow-key-management-capabilities", false, "Allow policies to grant listKeys, writeKeys and deleteKeys. Keys with these capabilities can escalate to full account access.")
 	flag.BoolVar(&allowInsecureAPIURL, "allow-insecure-api-url", false, "Allow http:// API URLs in ClusterProviderConfigs. For testing only.")
@@ -111,6 +118,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	if clusterID == "" {
+		var ns corev1.Namespace
+		if err := mgr.GetAPIReader().Get(context.Background(), client.ObjectKey{Name: "kube-system"}, &ns); err != nil {
+			setupLog.Error(err, "unable to derive --cluster-id from the kube-system namespace; set it explicitly")
+			os.Exit(1)
+		}
+		clusterID = strings.ReplaceAll(string(ns.UID), "-", "")[:8]
+	}
+	if !regexp.MustCompile(`^[a-z0-9]{8}$`).MatchString(clusterID) {
+		setupLog.Error(nil, "--cluster-id must be 8 characters of [a-z0-9]", "clusterID", clusterID)
+		os.Exit(1)
+	}
+	setupLog.Info("cluster identity", "clusterID", clusterID)
+
 	deps := controller.Deps{
 		Client: mgr.GetClient(),
 		Registry: &provider.Registry{
@@ -125,6 +146,7 @@ func main() {
 			KeyVerifyInterval:       keyVerifyInterval,
 			DefaultGracePeriod:      gracePeriod,
 			RevokeOnPolicyViolation: revokeOnPolicyViolation,
+			ClusterID:               clusterID,
 		},
 	}
 
@@ -138,6 +160,11 @@ func main() {
 	}
 	if err := (&controller.ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ApplicationKey")
+		os.Exit(1)
+	}
+
+	if err := mgr.Add(&controller.KeySweeper{Deps: deps, APIReader: mgr.GetAPIReader(), Interval: sweepInterval}); err != nil {
+		setupLog.Error(err, "unable to add key sweeper")
 		os.Exit(1)
 	}
 

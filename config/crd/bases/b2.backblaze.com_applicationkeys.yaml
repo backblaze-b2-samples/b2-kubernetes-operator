@@ -319,6 +319,13 @@ spec:
                 x-kubernetes-list-map-keys:
                 - keyID
                 x-kubernetes-list-type: map
+              scheduledRevocation:
+                description: |-
+                  ScheduledRevocation is when the current key will be revoked because it
+                  is no longer allowed (policy change, or its Bucket is gone). Cleared if
+                  access is restored before then.
+                format: date-time
+                type: string
               secretName:
                 description: SecretName holding the key.
                 type: string

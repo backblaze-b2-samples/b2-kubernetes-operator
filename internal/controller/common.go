@@ -48,6 +48,11 @@ const (
 	ManagedByValue = "b2-operator"
 	// OwnerInfoKey is the bucketInfo key recording the owning resource's UID.
 	OwnerInfoKey = "b2operator-owner-uid"
+	// ReleasedInfoKey records the namespace that released a retained bucket,
+	// so that only that namespace can adopt it again.
+	ReleasedInfoKey = "b2operator-released-from"
+	// KeyNamePrefix starts the name of every B2 key the operator creates.
+	KeyNamePrefix = "b2op"
 
 	indexBucketRef      = ".spec.bucketRef.name"
 	indexProviderConfig = ".spec.providerConfigRef.name"
@@ -64,8 +69,11 @@ type Options struct {
 	// DefaultGracePeriod is how long a replaced key stays valid.
 	DefaultGracePeriod time.Duration
 	// RevokeOnPolicyViolation revokes existing keys that a policy change no
-	// longer allows.
+	// longer allows, after the key's grace period.
 	RevokeOnPolicyViolation bool
+	// ClusterID distinguishes this cluster's keys from other clusters'
+	// sharing a B2 account (8 characters of [a-z0-9]).
+	ClusterID string
 }
 
 // Deps are the collaborators shared by the reconcilers.
@@ -100,7 +108,7 @@ func setCondition(conds *[]metav1.Condition, generation int64, status metav1.Con
 // another resource) and Warning for anything that needs attention.
 func eventType(reason string) string {
 	switch reason {
-	case b2v1.ReasonBucketNotReady, b2v1.ReasonProviderNotReady, b2v1.ReasonReconciling:
+	case b2v1.ReasonBucketNotReady, b2v1.ReasonBucketNotFound, b2v1.ReasonProviderNotReady, b2v1.ReasonReconciling:
 		return corev1.EventTypeNormal
 	}
 	return corev1.EventTypeWarning

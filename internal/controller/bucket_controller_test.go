@@ -235,6 +235,72 @@ func TestBucketDeletionRetainReleasesOwnership(t *testing.T) {
 	got := fakeB2.Bucket(name)
 	g.Expect(got).NotTo(BeNil(), "Retain must keep the bucket")
 	g.Expect(got.BucketInfo).NotTo(HaveKey(OwnerInfoKey))
+	g.Expect(got.BucketInfo).To(HaveKeyWithValue(ReleasedInfoKey, ns))
+}
+
+func TestBucketDeletionWaitsForItsKeys(t *testing.T) {
+	g := requireEnv(t)
+	ctx := context.Background()
+	ns := newNamespace(t, true)
+	bkt := readyBucket(g, ns, "haskeys")
+	key := newKey(ns, "app", "haskeys", "readFiles")
+	g.Expect(k8s.Create(ctx, key)).To(Succeed())
+	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	keyID := key.Status.KeyID
+
+	g.Expect(k8s.Delete(ctx, bkt)).To(Succeed())
+	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonDeletionBlocked)
+	g.Expect(fakeB2.Bucket(bkt.Spec.BucketName).BucketInfo).To(HaveKey(OwnerInfoKey), "must not release the bucket while keys exist")
+
+	g.Expect(k8s.Delete(ctx, key)).To(Succeed())
+	g.Eventually(func() bool {
+		return apierrors.IsNotFound(k8s.Get(ctx, client.ObjectKeyFromObject(bkt), &b2v1.Bucket{}))
+	}, timeout, poll).Should(BeTrue())
+	g.Expect(fakeB2.Key(keyID)).To(BeNil())
+}
+
+// Name patterns like "{namespace}-*" also match the names of namespaces that
+// extend another's name ("a" vs "a-b"). Ownership in B2 must still keep
+// each namespace out of the other's buckets.
+func TestCrossNamespacePrefixOverlap(t *testing.T) {
+	g := requireEnv(t)
+	ctx := context.Background()
+	// The victim's namespace extends the attacker's name, so the victim's
+	// buckets ("<attacker>-b-...") match the attacker's pattern "{namespace}-*".
+	attacker := newNamespace(t, false)
+	var ns corev1.Namespace
+	g.Expect(k8s.Get(ctx, client.ObjectKey{Name: attacker}, &ns)).To(Succeed())
+	ns.Labels = map[string]string{externalLabel: "true"}
+	g.Expect(k8s.Update(ctx, &ns)).To(Succeed())
+	victim := createNamespace(t, attacker+"-b", map[string]string{tenantLabel: "true"})
+	victimBucket := readyBucket(g, victim, "data")
+	name := victimBucket.Spec.BucketName
+
+	// An external key for the victim's live bucket is refused.
+	steal := newKey(attacker, "steal", "", "readFiles")
+	steal.Spec.BucketName = name
+	g.Expect(k8s.Create(ctx, steal)).To(Succeed())
+	eventuallyReason(g, steal, keyConds(steal), b2v1.ReasonPolicyDenied)
+	g.Expect(readyCondition(g, steal, keyConds(steal)).Message).To(ContainSubstring("outside namespace"))
+	g.Expect(steal.Status.KeyID).To(BeEmpty())
+
+	// Once the victim retains and releases it, the attacker cannot adopt it.
+	g.Expect(k8s.Delete(ctx, victimBucket)).To(Succeed())
+	g.Eventually(func() bool {
+		return apierrors.IsNotFound(k8s.Get(ctx, client.ObjectKeyFromObject(victimBucket), &b2v1.Bucket{}))
+	}, timeout, poll).Should(BeTrue())
+	adopt := newBucket(attacker, "adopt", name)
+	adopt.Spec.AdoptExisting = true
+	g.Expect(k8s.Create(ctx, adopt)).To(Succeed())
+	eventuallyReason(g, adopt, bucketConds(adopt), b2v1.ReasonBucketOwnedElsewhere)
+	g.Expect(fakeB2.Bucket(name).BucketInfo).NotTo(HaveKey(OwnerInfoKey))
+
+	// Nor can it get a key for the released bucket.
+	touch(g, steal)
+	g.Eventually(func(g Gomega) {
+		c := readyCondition(g, steal, keyConds(steal))
+		g.Expect(c.Message).To(ContainSubstring("released by namespace"))
+	}, timeout, poll).Should(Succeed())
 }
 
 func TestBucketDeletionDeleteWaitsForEmptyBucket(t *testing.T) {

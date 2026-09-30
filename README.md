@@ -96,8 +96,9 @@ Read [docs/security.md](docs/security.md) before running this on a shared cluste
 - **Tenants never see the operator's credentials.** They only receive keys that a policy allows.
 - **Default deny.** With no matching `B2AccessPolicy`, every Bucket and ApplicationKey is refused with reason `PolicyDenied`.
 - **Key-management capabilities are blocked.** `listKeys`, `writeKeys` and `deleteKeys` would let a tenant escalate to the operator's own power, so the operator refuses them unless it runs with `--allow-key-management-capabilities`.
-- **Tightening a policy revokes keys it no longer allows.** Disable with `--revoke-on-policy-violation=false`.
-- **Ownership is recorded in B2.** Each bucket's `bucketInfo` holds its owner's resource UID (`b2operator-owner-uid`), so two resources (or two clusters) can never fight over one bucket.
+- **Tightening a policy revokes keys it no longer allows** after their grace period. A brief gap, such as a policy being replaced, does not break workloads. Disable with `--revoke-on-policy-violation=false`.
+- **No credentials outlive their resource.** A Bucket cannot be deleted while ApplicationKeys reference it. Keys whose resource was force-deleted (finalizer removed) are revoked by a periodic sweep.
+- **Ownership is recorded in B2.** Each bucket's `bucketInfo` holds its owner's resource UID (`b2operator-owner-uid`), so two resources (or two clusters) can never fight over one bucket. A retained bucket records the namespace that released it, and only that namespace can adopt it again.
 - **Namespace admins and editors can manage Buckets and ApplicationKeys** through aggregated roles. `B2AccessPolicy` and `ClusterProviderConfig` are for cluster admins only.
 
 ### Operator key
@@ -115,6 +116,8 @@ Operator flags (Helm values under `operator.*`):
 | `--default-grace-period` | `15m` | How long a replaced key stays valid |
 | `--revoke-on-policy-violation` | `true` | Revoke keys that policies no longer allow |
 | `--allow-key-management-capabilities` | `false` | Let policies grant `listKeys`/`writeKeys`/`deleteKeys` |
+| `--orphan-key-sweep-interval` | `1h` | Revoke keys this cluster created for ApplicationKeys that no longer exist |
+| `--cluster-id` | from `kube-system` UID | ID embedded in B2 key names; must differ between clusters sharing an account |
 | `--allow-insecure-api-url` | `false` | Allow `http://` API URLs (testing only) |
 
 **Cost:** each resync of a Bucket is one `b2_list_buckets` call, and each key verification is one `b2_authorize_account` call. Both are Class C transactions. With the defaults, 100 buckets and 100 keys make about 16,800 calls a day. Raise the intervals if that matters to you.

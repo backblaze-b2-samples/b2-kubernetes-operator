@@ -179,6 +179,12 @@ type ApplicationKeyStatus struct {
 	// +optional
 	PendingKeyName string `json:"pendingKeyName,omitempty"`
 
+	// ScheduledRevocation is when the current key will be revoked because it
+	// is no longer allowed (policy change, or its Bucket is gone). Cleared if
+	// access is restored before then.
+	// +optional
+	ScheduledRevocation *metav1.Time `json:"scheduledRevocation,omitempty"`
+
 	// RetiringKeys are replaced keys that will be revoked after their grace
 	// period.
 	// +listType=map

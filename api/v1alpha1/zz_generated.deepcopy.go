@@ -140,6 +140,10 @@ func (in *ApplicationKeyStatus) DeepCopyInto(out *ApplicationKeyStatus) {
 		in, out := &in.LastVerifiedTime, &out.LastVerifiedTime
 		*out = (*in).DeepCopy()
 	}
+	if in.ScheduledRevocation != nil {
+		in, out := &in.ScheduledRevocation, &out.ScheduledRevocation
+		*out = (*in).DeepCopy()
+	}
 	if in.RetiringKeys != nil {
 		in, out := &in.RetiringKeys, &out.RetiringKeys
 		*out = make([]RetiringKey, len(*in))

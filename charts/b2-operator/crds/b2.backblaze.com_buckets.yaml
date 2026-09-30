@@ -78,14 +78,16 @@ spec:
                   type: string
                 description: |-
                   BucketInfo is user metadata stored with the bucket. B2 lowercases keys,
-                  so keys must be lowercase. One entry is reserved for the operator.
+                  so keys must be lowercase. One entry is used by the operator.
                 maxProperties: 9
                 type: object
                 x-kubernetes-validations:
                 - message: bucketInfo keys must be lowercase
                   rule: self.all(k, k == k.lowerAscii())
-                - message: bucketInfo key b2operator-owner-uid is reserved
-                  rule: '!(''b2operator-owner-uid'' in self)'
+                - message: bucketInfo keys b2operator-owner-uid and b2operator-released-from
+                    are reserved
+                  rule: '!(''b2operator-owner-uid'' in self) && !(''b2operator-released-from''
+                    in self)'
               bucketName:
                 description: BucketName is the globally unique B2 bucket name. Immutable.
                 maxLength: 63

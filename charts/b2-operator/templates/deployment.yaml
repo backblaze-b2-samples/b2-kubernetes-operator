@@ -52,6 +52,10 @@ spec:
             - --default-grace-period={{ .Values.operator.defaultGracePeriod }}
             - --revoke-on-policy-violation={{ .Values.operator.revokeOnPolicyViolation }}
             - --allow-key-management-capabilities={{ .Values.operator.allowKeyManagementCapabilities }}
+            - --orphan-key-sweep-interval={{ .Values.operator.orphanKeySweepInterval }}
+            {{- with .Values.operator.clusterID }}
+            - --cluster-id={{ . }}
+            {{- end }}
             - --zap-log-level={{ .Values.operator.logLevel }}
             - --zap-encoder={{ .Values.operator.logEncoding }}
             {{- with .Values.operator.extraArgs }}

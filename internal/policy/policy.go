@@ -172,12 +172,10 @@ func EvaluateKey(policies []b2v1.B2AccessPolicy, nsLabels labels.Set, req KeyReq
 			if !kp.AllowAccountWide {
 				why = append(why, "keys must be restricted to a bucket")
 			}
-		case req.External:
-			if !kp.AllowExternalBuckets {
-				why = append(why, "keys for buckets not managed in this namespace are not allowed")
-			} else if !MatchesAny(p.Spec.Buckets.NamePatterns, req.Namespace, req.BucketName) {
-				why = append(why, fmt.Sprintf("bucket name %q matches none of %v", req.BucketName, p.Spec.Buckets.NamePatterns))
-			}
+		case req.External && !kp.AllowExternalBuckets:
+			why = append(why, "keys for buckets not managed in this namespace are not allowed")
+		case !MatchesAny(p.Spec.Buckets.NamePatterns, req.Namespace, req.BucketName):
+			why = append(why, fmt.Sprintf("bucket name %q matches none of %v", req.BucketName, p.Spec.Buckets.NamePatterns))
 		}
 		if kp.MaxValidity != nil {
 			if req.ValidFor == 0 {

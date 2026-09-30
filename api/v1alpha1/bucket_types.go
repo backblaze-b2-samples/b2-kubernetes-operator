@@ -35,8 +35,9 @@ const (
 type DeletionPolicy string
 
 const (
-	// DeletionPolicyRetain leaves the bucket and its data in B2 and releases
-	// the operator's ownership marker so it can be adopted again.
+	// DeletionPolicyRetain leaves the bucket and its data in B2. The bucket
+	// can be adopted again from the same namespace; adoption from another
+	// namespace needs a cluster administrator to clear the release marker.
 	DeletionPolicyRetain DeletionPolicy = "Retain"
 	// DeletionPolicyDelete deletes the bucket. B2 only deletes empty buckets;
 	// the resource stays in Terminating until the bucket is emptied.
@@ -190,10 +191,10 @@ type BucketSpec struct {
 	BucketType BucketType `json:"bucketType,omitempty"`
 
 	// BucketInfo is user metadata stored with the bucket. B2 lowercases keys,
-	// so keys must be lowercase. One entry is reserved for the operator.
+	// so keys must be lowercase. One entry is used by the operator.
 	// +kubebuilder:validation:MaxProperties=9
 	// +kubebuilder:validation:XValidation:rule="self.all(k, k == k.lowerAscii())",message="bucketInfo keys must be lowercase"
-	// +kubebuilder:validation:XValidation:rule="!('b2operator-owner-uid' in self)",message="bucketInfo key b2operator-owner-uid is reserved"
+	// +kubebuilder:validation:XValidation:rule="!('b2operator-owner-uid' in self) && !('b2operator-released-from' in self)",message="bucketInfo keys b2operator-owner-uid and b2operator-released-from are reserved"
 	// +optional
 	BucketInfo map[string]string `json:"bucketInfo,omitempty"`
 
