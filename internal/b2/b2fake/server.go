@@ -38,7 +38,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2"
 )
 
 // AllCapabilities is every capability a master key holds.

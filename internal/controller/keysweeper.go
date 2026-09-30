@@ -27,8 +27,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	b2v1 "github.com/backblaze-b2-samples/b2-operator/api/v1alpha1"
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2"
+	b2v1 "github.com/backblaze-b2-samples/b2-kubernetes-operator/api/v1alpha1"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2"
 )
 
 var orphansRevoked = prometheus.NewCounter(prometheus.CounterOpts{

@@ -2,29 +2,29 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "b2-operator.fullname" . }}
+  name: {{ include "b2-kubernetes-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 spec:
   minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
   selector:
     matchLabels:
-      {{- include "b2-operator.selectorLabels" . | nindent 6 }}
+      {{- include "b2-kubernetes-operator.selectorLabels" . | nindent 6 }}
 ---
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "b2-operator.fullname" . }}
+  name: {{ include "b2-kubernetes-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "b2-operator.selectorLabels" . | nindent 6 }}
+      {{- include "b2-kubernetes-operator.selectorLabels" . | nindent 6 }}
   policyTypes: ["Ingress"]
   ingress:
     - ports:
@@ -43,7 +43,7 @@ kind: ClusterProviderConfig
 metadata:
   name: default
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 spec:
   apiURL: {{ .Values.defaultProviderConfig.apiURL }}
   credentialsSecretRef:

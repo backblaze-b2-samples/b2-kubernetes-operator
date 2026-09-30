@@ -28,8 +28,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	b2v1 "github.com/backblaze-b2-samples/b2-operator/api/v1alpha1"
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2"
+	b2v1 "github.com/backblaze-b2-samples/b2-kubernetes-operator/api/v1alpha1"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2"
 )
 
 // uniqueCustomer makes customer IDs (and so emails and names) unique per

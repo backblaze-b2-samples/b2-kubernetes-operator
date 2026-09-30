@@ -1,4 +1,4 @@
-module github.com/backblaze-b2-samples/b2-operator
+module github.com/backblaze-b2-samples/b2-kubernetes-operator
 
 go 1.26.3
 

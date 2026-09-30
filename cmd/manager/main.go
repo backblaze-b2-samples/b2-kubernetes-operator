@@ -41,12 +41,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	b2v1 "github.com/backblaze-b2-samples/b2-operator/api/v1alpha1"
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2"
-	"github.com/backblaze-b2-samples/b2-operator/internal/controller"
-	"github.com/backblaze-b2-samples/b2-operator/internal/policy"
-	"github.com/backblaze-b2-samples/b2-operator/internal/provider"
-	"github.com/backblaze-b2-samples/b2-operator/internal/version"
+	b2v1 "github.com/backblaze-b2-samples/b2-kubernetes-operator/api/v1alpha1"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/controller"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/policy"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/provider"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/version"
 )
 
 var scheme = runtime.NewScheme()
@@ -86,7 +86,7 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 	setupLog := ctrl.Log.WithName("setup")
-	setupLog.Info("starting b2-operator", "version", version.Version, "commit", version.Commit)
+	setupLog.Info("starting b2-kubernetes-operator", "version", version.Version, "commit", version.Commit)
 
 	var tlsOpts []func(*tls.Config)
 	if !enableHTTP2 {

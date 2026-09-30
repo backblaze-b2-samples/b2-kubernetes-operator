@@ -18,7 +18,7 @@ limitations under the License.
 package version
 
 // Version is the operator version, e.g. "v0.1.0". Set at build time with
-// -ldflags "-X github.com/backblaze-b2-samples/b2-operator/internal/version.Version=v0.1.0".
+// -ldflags "-X github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/version.Version=v0.1.0".
 var Version = "dev"
 
 // Commit is the git commit the binary was built from.
@@ -26,5 +26,5 @@ var Commit = "unknown"
 
 // UserAgent is sent to B2 with every request.
 func UserAgent() string {
-	return "b2-operator/" + Version
+	return "b2-kubernetes-operator/" + Version
 }

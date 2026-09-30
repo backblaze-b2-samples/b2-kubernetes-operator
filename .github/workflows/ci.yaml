@@ -88,10 +88,10 @@ jobs:
         with:
           context: .
           load: true
-          tags: b2-operator:scan
+          tags: b2-kubernetes-operator:scan
       - uses: aquasecurity/trivy-action@0.33.1
         with:
-          image-ref: b2-operator:scan
+          image-ref: b2-kubernetes-operator:scan
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"

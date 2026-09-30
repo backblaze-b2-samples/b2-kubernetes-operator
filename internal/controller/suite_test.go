@@ -42,10 +42,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	b2v1 "github.com/backblaze-b2-samples/b2-operator/api/v1alpha1"
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2/b2fake"
-	"github.com/backblaze-b2-samples/b2-operator/internal/policy"
-	"github.com/backblaze-b2-samples/b2-operator/internal/provider"
+	b2v1 "github.com/backblaze-b2-samples/b2-kubernetes-operator/api/v1alpha1"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2/b2fake"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/policy"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/provider"
 )
 
 const (

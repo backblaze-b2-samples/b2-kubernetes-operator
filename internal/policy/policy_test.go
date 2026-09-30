@@ -29,7 +29,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	b2v1 "github.com/backblaze-b2-samples/b2-operator/api/v1alpha1"
+	b2v1 "github.com/backblaze-b2-samples/b2-kubernetes-operator/api/v1alpha1"
 )
 
 func TestGlob(t *testing.T) {

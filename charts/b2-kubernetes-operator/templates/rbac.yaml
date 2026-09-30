@@ -1,26 +1,26 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "b2-operator.fullname" . }}-manager
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-manager
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "b2-operator.fullname" . }}-manager
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-manager
 subjects:
   - kind: ServiceAccount
-    name: {{ include "b2-operator.serviceAccountName" . }}
+    name: {{ include "b2-kubernetes-operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 ---
 # Leader election, scoped to the release namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "b2-operator.fullname" . }}-leader-election
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
@@ -32,26 +32,26 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "b2-operator.fullname" . }}-leader-election
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "b2-operator.fullname" . }}-leader-election
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-leader-election
 subjects:
   - kind: ServiceAccount
-    name: {{ include "b2-operator.serviceAccountName" . }}
+    name: {{ include "b2-kubernetes-operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 ---
 # Lets Prometheus scrape the authenticated metrics endpoint.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "b2-operator.fullname" . }}-metrics-reader
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-metrics-reader
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 rules:
   - nonResourceURLs: ["/metrics"]
     verbs: ["get"]
@@ -62,9 +62,9 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "b2-operator.fullname" . }}-editor
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-editor
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
     rbac.authorization.k8s.io/aggregate-to-admin: "true"
     rbac.authorization.k8s.io/aggregate-to-edit: "true"
 rules:
@@ -78,9 +78,9 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "b2-operator.fullname" . }}-viewer
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-viewer
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
     rbac.authorization.k8s.io/aggregate-to-view: "true"
 rules:
   - apiGroups: ["b2.backblaze.com"]

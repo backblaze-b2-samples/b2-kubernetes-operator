@@ -2,13 +2,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "b2-operator.fullname" . }}-metrics
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-metrics
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 spec:
   selector:
-    {{- include "b2-operator.selectorLabels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.selectorLabels" . | nindent 4 }}
   ports:
     - name: https-metrics
       port: {{ .Values.metrics.port }}
@@ -18,17 +18,17 @@ spec:
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ include "b2-operator.fullname" . }}
+  name: {{ include "b2-kubernetes-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
     {{- with .Values.metrics.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   selector:
     matchLabels:
-      {{- include "b2-operator.selectorLabels" . | nindent 6 }}
+      {{- include "b2-kubernetes-operator.selectorLabels" . | nindent 6 }}
   endpoints:
     - port: https-metrics
       scheme: https

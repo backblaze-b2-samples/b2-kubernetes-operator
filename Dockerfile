@@ -12,7 +12,7 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
-      -ldflags "-s -w -X github.com/backblaze-b2-samples/b2-operator/internal/version.Version=${VERSION} -X github.com/backblaze-b2-samples/b2-operator/internal/version.Commit=${COMMIT}" \
+      -ldflags "-s -w -X github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/version.Version=${VERSION} -X github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/version.Commit=${COMMIT}" \
       -o /out/manager ./cmd/manager && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /out/b2fake ./cmd/b2fake
 
@@ -23,7 +23,7 @@ USER 65532:65532
 ENTRYPOINT ["/b2fake"]
 
 FROM gcr.io/distroless/static-debian12:nonroot
-LABEL org.opencontainers.image.source="https://github.com/backblaze-b2-samples/b2-operator" \
+LABEL org.opencontainers.image.source="https://github.com/backblaze-b2-samples/b2-kubernetes-operator" \
       org.opencontainers.image.description="Kubernetes operator for Backblaze B2" \
       org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /out/manager /manager

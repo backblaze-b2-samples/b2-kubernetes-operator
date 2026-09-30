@@ -1,5 +1,5 @@
 # Image URL to use for all building/pushing image targets.
-IMG ?= ghcr.io/backblaze-b2-samples/b2-operator:dev
+IMG ?= ghcr.io/backblaze-b2-samples/b2-kubernetes-operator:dev
 # Kubernetes version of the envtest control plane binaries.
 ENVTEST_K8S_VERSION ?= 1.34.x
 
@@ -13,7 +13,7 @@ CONTROLLER_TOOLS_VERSION ?= v0.22.0
 ENVTEST_VERSION ?= release-0.25
 GOLANGCI_LINT_VERSION ?= v2.12.2
 
-CHART_DIR := charts/b2-operator
+CHART_DIR := charts/b2-kubernetes-operator
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
@@ -65,14 +65,14 @@ KIND_CLUSTER ?= b2-operator-e2e
 .PHONY: e2e-setup
 e2e-setup: ## Create a kind cluster and install the operator and the fake B2 API into it.
 	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --name $(KIND_CLUSTER) --wait 120s
-	docker build -t b2-operator:e2e .
+	docker build -t b2-kubernetes-operator:e2e .
 	docker build --target b2fake -t b2fake:e2e .
-	kind load docker-image --name $(KIND_CLUSTER) b2-operator:e2e b2fake:e2e
+	kind load docker-image --name $(KIND_CLUSTER) b2-kubernetes-operator:e2e b2fake:e2e
 	kubectl --context kind-$(KIND_CLUSTER) create namespace b2-operator-system --dry-run=client -o yaml | kubectl --context kind-$(KIND_CLUSTER) apply -f -
 	kubectl --context kind-$(KIND_CLUSTER) apply -f test/e2e/testdata/b2fake.yaml
 	helm upgrade --install b2-operator $(CHART_DIR) --kube-context kind-$(KIND_CLUSTER) \
 		--namespace b2-operator-system --wait --timeout 3m \
-		--set image.repository=b2-operator,image.tag=e2e,image.pullPolicy=Never \
+		--set image.repository=b2-kubernetes-operator,image.tag=e2e,image.pullPolicy=Never \
 		--set operator.logEncoding=console,operator.defaultGracePeriod=5s \
 		--set 'operator.extraArgs={--allow-insecure-api-url}'
 	# The image tag does not change between runs, so force pods onto the fresh images.

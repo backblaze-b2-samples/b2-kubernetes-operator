@@ -42,9 +42,9 @@ Prerequisites: Kubernetes 1.30+, Helm 3, and a B2 application key for the operat
 
 ```sh
 # 1. Install the operator (CRDs are installed by the chart). Releases publish
-#    the chart to oci://ghcr.io/backblaze-b2-samples/charts/b2-operator;
+#    the chart to oci://ghcr.io/backblaze-b2-samples/charts/b2-kubernetes-operator;
 #    from a checkout:
-helm install b2-operator charts/b2-operator \
+helm install b2-operator charts/b2-kubernetes-operator \
   --namespace b2-operator-system --create-namespace
 
 # 2. Give it credentials for your B2 account.

@@ -29,9 +29,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	b2v1 "github.com/backblaze-b2-samples/b2-operator/api/v1alpha1"
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2"
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2/b2fake"
+	b2v1 "github.com/backblaze-b2-samples/b2-kubernetes-operator/api/v1alpha1"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2/b2fake"
 )
 
 func keyConds(k *b2v1.ApplicationKey) func() []metav1.Condition {

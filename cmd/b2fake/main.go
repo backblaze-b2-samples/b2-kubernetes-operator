@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2/b2fake"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2/b2fake"
 )
 
 func main() {

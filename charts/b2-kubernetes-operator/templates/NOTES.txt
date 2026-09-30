@@ -14,4 +14,4 @@ Next steps:
 
    kubectl get clusterproviderconfigs,b2accesspolicies
 
-See https://github.com/backblaze-b2-samples/b2-operator#quick-start
+See https://github.com/backblaze-b2-samples/b2-kubernetes-operator#quick-start

@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2"
-	"github.com/backblaze-b2-samples/b2-operator/internal/b2/b2fake"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2/b2fake"
 )
 
 func newClient(t *testing.T, srv *b2fake.Server) *b2.Client {

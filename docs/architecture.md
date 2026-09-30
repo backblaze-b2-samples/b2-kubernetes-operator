@@ -11,7 +11,7 @@ internal/provider      ClusterProviderConfig -> authorized B2 client, cached per
 internal/b2            B2 Native API v4 client (no third-party dependencies)
 internal/b2/b2fake     in-memory B2 used by unit, integration and e2e tests
 cmd/b2fake             the fake as a binary, for kind e2e tests only
-charts/b2-operator     Helm chart (CRDs and manager RBAC are generated)
+charts/b2-kubernetes-operator     Helm chart (CRDs and manager RBAC are generated)
 ```
 
 ## Reconcile flow

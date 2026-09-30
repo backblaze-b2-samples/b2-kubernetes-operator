@@ -2,9 +2,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "b2-operator.fullname" . }}-manager
+  name: {{ include "b2-kubernetes-operator.fullname" . }}-manager
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 rules:
 - apiGroups:
   - ""

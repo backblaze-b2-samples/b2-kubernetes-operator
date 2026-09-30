@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "b2-operator.fullname" . }}
+  name: {{ include "b2-kubernetes-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- include "b2-kubernetes-operator.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   revisionHistoryLimit: 5
   selector:
     matchLabels:
-      {{- include "b2-operator.selectorLabels" . | nindent 6 }}
+      {{- include "b2-kubernetes-operator.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -19,12 +19,12 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "b2-operator.selectorLabels" . | nindent 8 }}
+        {{- include "b2-kubernetes-operator.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "b2-operator.serviceAccountName" . }}
+      serviceAccountName: {{ include "b2-kubernetes-operator.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -37,7 +37,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: manager
-          image: {{ include "b2-operator.image" . }}
+          image: {{ include "b2-kubernetes-operator.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect=true

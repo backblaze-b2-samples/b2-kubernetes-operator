@@ -1,8 +1,8 @@
-{{- define "b2-operator.name" -}}
+{{- define "b2-kubernetes-operator.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{- define "b2-operator.fullname" -}}
+{{- define "b2-kubernetes-operator.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -15,27 +15,27 @@
 {{- end }}
 {{- end }}
 
-{{- define "b2-operator.labels" -}}
+{{- define "b2-kubernetes-operator.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
-{{ include "b2-operator.selectorLabels" . }}
+{{ include "b2-kubernetes-operator.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
-{{- define "b2-operator.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "b2-operator.name" . }}
+{{- define "b2-kubernetes-operator.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "b2-kubernetes-operator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{- define "b2-operator.serviceAccountName" -}}
+{{- define "b2-kubernetes-operator.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "b2-operator.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "b2-kubernetes-operator.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
 
-{{- define "b2-operator.image" -}}
+{{- define "b2-kubernetes-operator.image" -}}
 {{- if .Values.image.digest }}
 {{- printf "%s@%s" .Values.image.repository .Values.image.digest }}
 {{- else }}
