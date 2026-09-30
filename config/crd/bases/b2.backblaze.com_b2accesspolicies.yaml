@@ -1,0 +1,217 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: b2accesspolicies.b2.backblaze.com
+spec:
+  group: b2.backblaze.com
+  names:
+    categories:
+    - b2
+    kind: B2AccessPolicy
+    listKind: B2AccessPolicyList
+    plural: b2accesspolicies
+    shortNames:
+    - b2policy
+    singular: b2accesspolicy
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.providerConfigs
+      name: Providers
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          B2AccessPolicy is a cluster-scoped allow-list that controls what B2
+          resources each namespace may request. The operator denies any Bucket or
+          ApplicationKey request that no policy fully allows; a single policy must
+          allow the whole request (permissions are not combined across policies).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              B2AccessPolicySpec grants the namespaces selected by NamespaceSelector
+              permission to use B2 through the listed provider configs.
+            properties:
+              buckets:
+                description: Buckets limits bucket management.
+                properties:
+                  allowAdoption:
+                    description: |-
+                      AllowAdoption permits spec.adoptExisting, taking over management of a
+                      bucket that already exists in the account and matches NamePatterns.
+                    type: boolean
+                  allowComplianceRetention:
+                    description: |-
+                      AllowComplianceRetention permits Object Lock default retention in
+                      compliance mode. Compliance-mode files cannot be deleted by anyone
+                      until their retention expires, so this can lock in storage costs.
+                    type: boolean
+                  allowDeletion:
+                    description: |-
+                      AllowDeletion permits deletionPolicy Delete, which deletes the B2
+                      bucket (if empty) when the Bucket resource is deleted.
+                    type: boolean
+                  allowPublic:
+                    description: AllowPublic permits bucketType allPublic.
+                    type: boolean
+                  namePatterns:
+                    description: |-
+                      NamePatterns are glob patterns (`*` matches any run of characters) that
+                      bucket names must match. The literal `{namespace}` is replaced with the
+                      requesting namespace, e.g. `acme-{namespace}-*`. A name must match at
+                      least one pattern to be created, adopted, or referenced by a key
+                      through spec.bucketName. An empty list allows no buckets.
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-type: set
+                type: object
+              keys:
+                description: Keys limits application key creation.
+                properties:
+                  allowAccountWide:
+                    description: AllowAccountWide permits keys that are not restricted
+                      to a bucket.
+                    type: boolean
+                  allowExternalBuckets:
+                    description: |-
+                      AllowExternalBuckets permits keys for buckets that are not managed by
+                      a Bucket resource in the same namespace (spec.bucketName). The bucket
+                      name must still match buckets.namePatterns.
+                    type: boolean
+                  allowedCapabilities:
+                    description: |-
+                      AllowedCapabilities is the set of capabilities keys may be granted.
+                      The key-management capabilities (listKeys, writeKeys, deleteKeys) are
+                      additionally blocked by the operator unless it runs with
+                      --allow-key-management-capabilities.
+                    items:
+                      description: Capability is a B2 application key capability.
+                      enum:
+                      - listKeys
+                      - writeKeys
+                      - deleteKeys
+                      - listAllBucketNames
+                      - listBuckets
+                      - readBuckets
+                      - writeBuckets
+                      - deleteBuckets
+                      - readBucketRetentions
+                      - writeBucketRetentions
+                      - readBucketEncryption
+                      - writeBucketEncryption
+                      - readBucketNotifications
+                      - writeBucketNotifications
+                      - listFiles
+                      - readFiles
+                      - shareFiles
+                      - writeFiles
+                      - deleteFiles
+                      - readFileLegalHolds
+                      - writeFileLegalHolds
+                      - readFileRetentions
+                      - writeFileRetentions
+                      - bypassGovernance
+                      - readBucketLogging
+                      - writeBucketLogging
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  maxValidity:
+                    description: |-
+                      MaxValidity, if set, requires every key to set spec.validFor no longer
+                      than this duration.
+                    type: string
+                type: object
+              namespaceSelector:
+                description: |-
+                  NamespaceSelector selects the namespaces this policy applies to. An
+                  empty selector selects every namespace.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
+              providerConfigs:
+                description: |-
+                  ProviderConfigs are the ClusterProviderConfig names the selected
+                  namespaces may use. "*" allows all.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+            required:
+            - namespaceSelector
+            - providerConfigs
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

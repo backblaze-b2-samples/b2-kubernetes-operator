@@ -1,0 +1,97 @@
+# -- Number of operator replicas. Only the leader reconciles; extra replicas
+# give fast failover.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/backblaze-b2-samples/b2-operator
+  # -- Defaults to the chart appVersion.
+  tag: ""
+  # -- Pin by digest for production, e.g. sha256:abc...
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -- Operator behaviour. See `manager --help` for details.
+operator:
+  # -- How often resources are compared with B2 to detect and correct drift.
+  resyncPeriod: 10m
+  # -- How often each application key is checked against B2.
+  keyVerifyInterval: 1h
+  # -- How long a replaced key stays valid by default.
+  defaultGracePeriod: 15m
+  # -- Revoke existing keys that B2AccessPolicies no longer allow.
+  revokeOnPolicyViolation: true
+  # -- Allow policies to grant listKeys/writeKeys/deleteKeys. Keys holding
+  # these can escalate to full account access; leave off unless required.
+  allowKeyManagementCapabilities: false
+  # -- Log level: debug, info, error.
+  logLevel: info
+  # -- Log encoding: json or console.
+  logEncoding: json
+  extraArgs: []
+
+# -- Optionally create a ClusterProviderConfig named "default".
+defaultProviderConfig:
+  create: false
+  # -- Name of an existing Secret in the release namespace with keys
+  # `applicationKeyId` and `applicationKey`. Recommended: manage it with
+  # External Secrets, Sealed Secrets or similar rather than Helm values.
+  existingSecret: ""
+  apiURL: https://api.backblazeb2.com
+
+# -- Grant namespace admins/editors permission to manage Buckets and
+# ApplicationKeys (via aggregated ClusterRoles). What they can actually do in
+# B2 is still limited by B2AccessPolicies.
+aggregateRolesToDefaultRoles: true
+
+metrics:
+  enabled: true
+  port: 8443
+  serviceMonitor:
+    enabled: false
+    interval: 1m
+    labels: {}
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+podAnnotations: {}
+podLabels: {}
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+podDisruptionBudget:
+  # -- Created only when replicaCount > 1.
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  # -- Restrict ingress to the metrics and probe ports. Egress to the
+  # Kubernetes API and B2 is not restricted.
+  enabled: false

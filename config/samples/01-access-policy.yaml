@@ -1,0 +1,24 @@
+# Cluster administrator: what tenant namespaces may do. Nothing is allowed
+# until a policy grants it.
+apiVersion: b2.backblaze.com/v1alpha1
+kind: B2AccessPolicy
+metadata:
+  name: app-teams
+spec:
+  # Namespaces labelled b2.backblaze.com/tenant=true.
+  namespaceSelector:
+    matchLabels:
+      b2.backblaze.com/tenant: "true"
+  providerConfigs: ["default"]
+  buckets:
+    # Each namespace may only use buckets named acme-<namespace>-*.
+    namePatterns: ["acme-{namespace}-*"]
+    allowPublic: false
+    allowAdoption: false
+    allowDeletion: false
+    allowComplianceRetention: false
+  keys:
+    allowedCapabilities: [listBuckets, listFiles, readFiles, writeFiles, deleteFiles]
+    allowAccountWide: false
+    allowExternalBuckets: false
+    maxValidity: 2160h # 90 days; keys must set validFor

@@ -1,0 +1,35 @@
+apiVersion: v2
+name: b2-operator
+description: Kubernetes operator for Backblaze B2 Cloud Storage buckets and scoped application keys.
+type: application
+version: 0.1.0
+appVersion: "v0.1.0"
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/backblaze-b2-samples/b2-operator
+sources:
+  - https://github.com/backblaze-b2-samples/b2-operator
+keywords:
+  - backblaze
+  - b2
+  - object-storage
+  - s3
+  - operator
+maintainers:
+  - name: Backblaze
+    url: https://www.backblaze.com
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "true"
+  artifacthub.io/crds: |
+    - kind: ClusterProviderConfig
+      version: v1alpha1
+      description: Credentials for one B2 account.
+    - kind: B2AccessPolicy
+      version: v1alpha1
+      description: Per-namespace allow-list of B2 buckets and key capabilities.
+    - kind: Bucket
+      version: v1alpha1
+      description: A B2 bucket.
+    - kind: ApplicationKey
+      version: v1alpha1
+      description: A scoped B2 application key delivered to a Secret.

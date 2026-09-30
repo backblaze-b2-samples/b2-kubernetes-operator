@@ -1,0 +1,232 @@
+/*
+Copyright 2026 Backblaze, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package b2
+
+// Wire types for the B2 Native API v4. Field names and shapes follow
+// https://www.backblaze.com/apidocs. Only the fields the operator uses are
+// modelled; unknown fields are ignored on decode.
+
+// BucketType values accepted by b2_create_bucket / b2_update_bucket.
+const (
+	BucketTypeAllPrivate = "allPrivate"
+	BucketTypeAllPublic  = "allPublic"
+)
+
+// Server-side encryption modes for a bucket default.
+const (
+	SSEModeB2       = "SSE-B2"
+	SSEAlgorithmAES = "AES256"
+)
+
+// Object Lock retention modes and period units.
+const (
+	RetentionModeGovernance = "governance"
+	RetentionModeCompliance = "compliance"
+	PeriodUnitDays          = "days"
+	PeriodUnitYears         = "years"
+)
+
+// Authorization is the decoded response of b2_authorize_account.
+type Authorization struct {
+	AccountID          string  `json:"accountId"`
+	AuthorizationToken string  `json:"authorizationToken"`
+	APIInfo            APIInfo `json:"apiInfo"`
+	// ApplicationKeyExpirationTimestamp is milliseconds since the epoch, or nil
+	// for a key that never expires.
+	ApplicationKeyExpirationTimestamp *int64 `json:"applicationKeyExpirationTimestamp"`
+}
+
+type APIInfo struct {
+	StorageAPI StorageAPI `json:"storageApi"`
+}
+
+type StorageAPI struct {
+	APIURL      string  `json:"apiUrl"`
+	DownloadURL string  `json:"downloadUrl"`
+	S3APIURL    string  `json:"s3ApiUrl"`
+	Allowed     Allowed `json:"allowed"`
+}
+
+type Allowed struct {
+	Buckets      []AllowedBucket `json:"buckets,omitempty"`
+	Capabilities []string        `json:"capabilities"`
+	NamePrefix   *string         `json:"namePrefix"`
+}
+
+type AllowedBucket struct {
+	ID   string  `json:"id"`
+	Name *string `json:"name"`
+}
+
+// LifecycleRule mirrors a B2 lifecycle rule. Nil day counts mean "unset".
+type LifecycleRule struct {
+	FileNamePrefix                                  string `json:"fileNamePrefix"`
+	DaysFromUploadingToHiding                       *int32 `json:"daysFromUploadingToHiding"`
+	DaysFromHidingToDeleting                        *int32 `json:"daysFromHidingToDeleting"`
+	DaysFromStartingToCancelingUnfinishedLargeFiles *int32 `json:"daysFromStartingToCancelingUnfinishedLargeFiles,omitempty"`
+}
+
+// CORSRule mirrors a B2 CORS rule.
+type CORSRule struct {
+	CORSRuleName      string   `json:"corsRuleName"`
+	AllowedOrigins    []string `json:"allowedOrigins"`
+	AllowedOperations []string `json:"allowedOperations"`
+	AllowedHeaders    []string `json:"allowedHeaders,omitempty"`
+	ExposeHeaders     []string `json:"exposeHeaders,omitempty"`
+	MaxAgeSeconds     int32    `json:"maxAgeSeconds"`
+}
+
+// ServerSideEncryption is the bucket default encryption setting. A nil Mode
+// means "no default encryption" and is serialised as {"mode": null}.
+type ServerSideEncryption struct {
+	Mode      *string `json:"mode"`
+	Algorithm *string `json:"algorithm,omitempty"`
+}
+
+// RetentionPeriod is an Object Lock default retention period.
+type RetentionPeriod struct {
+	Duration int32  `json:"duration"`
+	Unit     string `json:"unit"`
+}
+
+// DefaultRetention is the Object Lock default retention. A nil Mode clears
+// the default and is serialised as {"mode": null}.
+type DefaultRetention struct {
+	Mode   *string          `json:"mode"`
+	Period *RetentionPeriod `json:"period,omitempty"`
+}
+
+// ProtectedValue wraps settings that B2 returns only when the calling key has
+// the capability to read them.
+type ProtectedSSE struct {
+	IsClientAuthorizedToRead bool                  `json:"isClientAuthorizedToRead"`
+	Value                    *ServerSideEncryption `json:"value"`
+}
+
+type FileLockValue struct {
+	IsFileLockEnabled bool              `json:"isFileLockEnabled"`
+	DefaultRetention  *DefaultRetention `json:"defaultRetention"`
+}
+
+type ProtectedFileLock struct {
+	IsClientAuthorizedToRead bool           `json:"isClientAuthorizedToRead"`
+	Value                    *FileLockValue `json:"value"`
+}
+
+// Bucket is a bucket as returned by list/create/update/delete.
+type Bucket struct {
+	AccountID                   string             `json:"accountId"`
+	BucketID                    string             `json:"bucketId"`
+	BucketName                  string             `json:"bucketName"`
+	BucketType                  string             `json:"bucketType"`
+	BucketInfo                  map[string]string  `json:"bucketInfo"`
+	CORSRules                   []CORSRule         `json:"corsRules"`
+	LifecycleRules              []LifecycleRule    `json:"lifecycleRules"`
+	DefaultServerSideEncryption *ProtectedSSE      `json:"defaultServerSideEncryption,omitempty"`
+	FileLockConfiguration       *ProtectedFileLock `json:"fileLockConfiguration,omitempty"`
+	Revision                    Revision           `json:"revision"`
+	Options                     []string           `json:"options,omitempty"`
+}
+
+// CreateBucketRequest is the body of b2_create_bucket. AccountID is filled in
+// by the client.
+type CreateBucketRequest struct {
+	AccountID                   string                `json:"accountId"`
+	BucketName                  string                `json:"bucketName"`
+	BucketType                  string                `json:"bucketType"`
+	BucketInfo                  map[string]string     `json:"bucketInfo,omitempty"`
+	CORSRules                   []CORSRule            `json:"corsRules,omitempty"`
+	LifecycleRules              []LifecycleRule       `json:"lifecycleRules,omitempty"`
+	FileLockEnabled             bool                  `json:"fileLockEnabled,omitempty"`
+	DefaultServerSideEncryption *ServerSideEncryption `json:"defaultServerSideEncryption,omitempty"`
+}
+
+// UpdateBucketRequest is the body of b2_update_bucket. Nil fields are left
+// unchanged by B2. Slices are pointers so that "replace with an empty list"
+// can be distinguished from "leave unchanged".
+type UpdateBucketRequest struct {
+	AccountID                   string                `json:"accountId"`
+	BucketID                    string                `json:"bucketId"`
+	BucketType                  string                `json:"bucketType,omitempty"`
+	BucketInfo                  *map[string]string    `json:"bucketInfo,omitempty"`
+	CORSRules                   *[]CORSRule           `json:"corsRules,omitempty"`
+	LifecycleRules              *[]LifecycleRule      `json:"lifecycleRules,omitempty"`
+	FileLockEnabled             *bool                 `json:"fileLockEnabled,omitempty"`
+	DefaultRetention            *DefaultRetention     `json:"defaultRetention,omitempty"`
+	DefaultServerSideEncryption *ServerSideEncryption `json:"defaultServerSideEncryption,omitempty"`
+	IfRevisionIs                Revision              `json:"ifRevisionIs,omitempty"`
+}
+
+// ListBucketsRequest is the body of b2_list_buckets. Set at most one of
+// BucketID and BucketName to look up a single bucket.
+type ListBucketsRequest struct {
+	AccountID  string `json:"accountId"`
+	BucketID   string `json:"bucketId,omitempty"`
+	BucketName string `json:"bucketName,omitempty"`
+}
+
+type listBucketsResponse struct {
+	Buckets []Bucket `json:"buckets"`
+}
+
+type deleteBucketRequest struct {
+	AccountID string `json:"accountId"`
+	BucketID  string `json:"bucketId"`
+}
+
+// CreateKeyRequest is the body of b2_create_key. AccountID is filled in by the
+// client.
+type CreateKeyRequest struct {
+	AccountID              string   `json:"accountId"`
+	Capabilities           []string `json:"capabilities"`
+	KeyName                string   `json:"keyName"`
+	ValidDurationInSeconds int64    `json:"validDurationInSeconds,omitempty"`
+	BucketIDs              []string `json:"bucketIds,omitempty"`
+	NamePrefix             string   `json:"namePrefix,omitempty"`
+}
+
+// ApplicationKey is a key as returned by create/list/delete. ApplicationKey
+// (the secret) is only populated in the b2_create_key response.
+type ApplicationKey struct {
+	AccountID           string   `json:"accountId"`
+	ApplicationKeyID    string   `json:"applicationKeyId"`
+	ApplicationKey      string   `json:"applicationKey,omitempty"`
+	KeyName             string   `json:"keyName"`
+	Capabilities        []string `json:"capabilities"`
+	BucketIDs           []string `json:"bucketIds,omitempty"`
+	NamePrefix          *string  `json:"namePrefix,omitempty"`
+	ExpirationTimestamp *int64   `json:"expirationTimestamp,omitempty"`
+	Options             []string `json:"options,omitempty"`
+}
+
+type deleteKeyRequest struct {
+	ApplicationKeyID string `json:"applicationKeyId"`
+}
+
+type listKeysRequest struct {
+	AccountID             string `json:"accountId"`
+	MaxKeyCount           int    `json:"maxKeyCount,omitempty"`
+	StartApplicationKeyID string `json:"startApplicationKeyId,omitempty"`
+}
+
+type listKeysResponse struct {
+	Keys                 []ApplicationKey `json:"keys"`
+	NextApplicationKeyID *string          `json:"nextApplicationKeyId"`
+}
+
+// Ptr returns a pointer to v. Convenience for optional wire fields.
+func Ptr[T any](v T) *T { return &v }

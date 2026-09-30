@@ -1,0 +1,39 @@
+# Test-only fake B2 API used by the e2e suite.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: b2fake
+  namespace: b2-operator-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: b2fake}
+  template:
+    metadata:
+      labels: {app: b2fake}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: b2fake
+          image: b2fake:e2e
+          imagePullPolicy: Never
+          args:
+            - --advertise-url=http://b2fake.b2-operator-system.svc:8080
+            - --master-key-id=e2eaccount01
+            - --master-key=e2e-master-key
+          ports: [{containerPort: 8080}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: b2fake
+  namespace: b2-operator-system
+spec:
+  selector: {app: b2fake}
+  ports: [{port: 8080, targetPort: 8080}]

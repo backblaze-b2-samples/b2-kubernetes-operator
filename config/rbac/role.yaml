@@ -1,0 +1,70 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: b2-operator-manager
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - b2.backblaze.com
+  resources:
+  - applicationkeys
+  - buckets
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - b2.backblaze.com
+  resources:
+  - applicationkeys/finalizers
+  - buckets/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - b2.backblaze.com
+  resources:
+  - applicationkeys/status
+  - buckets/status
+  - clusterproviderconfigs/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - b2.backblaze.com
+  resources:
+  - b2accesspolicies
+  - clusterproviderconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch

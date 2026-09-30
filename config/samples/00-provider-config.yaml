@@ -1,0 +1,18 @@
+# Cluster administrator: credentials for one B2 account.
+#
+# Create the operator's application key with the B2 CLI, e.g.:
+#   b2 key create b2-operator \
+#     listBuckets,readBuckets,writeBuckets,deleteBuckets,listKeys,writeKeys,deleteKeys,readBucketEncryption,writeBucketEncryption,readBucketRetentions,writeBucketRetentions,listFiles,readFiles,writeFiles,deleteFiles
+# Give it every capability you want tenants' keys to have, too.
+#
+# Then store it (prefer External Secrets / Sealed Secrets in production):
+#   kubectl -n b2-operator-system create secret generic b2-credentials \
+#     --from-literal=applicationKeyId=<keyID> --from-literal=applicationKey=<key>
+apiVersion: b2.backblaze.com/v1alpha1
+kind: ClusterProviderConfig
+metadata:
+  name: default
+spec:
+  credentialsSecretRef:
+    namespace: b2-operator-system
+    name: b2-credentials

@@ -1,0 +1,17 @@
+The Backblaze B2 operator is installed in namespace {{ .Release.Namespace }}.
+
+Next steps:
+
+1. Store a B2 application key for the operator:
+
+   kubectl -n {{ .Release.Namespace }} create secret generic b2-credentials \
+     --from-literal=applicationKeyId=<keyID> --from-literal=applicationKey=<key>
+
+2. Create a ClusterProviderConfig pointing at it{{ if .Values.defaultProviderConfig.create }} (done: "default"){{ end }}.
+
+3. Create a B2AccessPolicy granting namespaces access. Nothing is allowed
+   until a policy exists.
+
+   kubectl get clusterproviderconfigs,b2accesspolicies
+
+See https://github.com/backblaze-b2-samples/b2-operator#quick-start

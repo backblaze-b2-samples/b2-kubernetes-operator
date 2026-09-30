@@ -1,0 +1,18 @@
+# Tenant: an Object Lock bucket for ransomware-resistant backups.
+# Governance mode can be bypassed by keys with bypassGovernance; compliance
+# mode cannot be shortened by anyone and must be allowed by policy.
+apiVersion: b2.backblaze.com/v1alpha1
+kind: Bucket
+metadata:
+  name: backups
+  namespace: shop
+spec:
+  bucketName: acme-shop-backups
+  defaultEncryption:
+    mode: SSE-B2
+  objectLock:
+    enabled: true
+    defaultRetention:
+      mode: governance
+      duration: 30
+      unit: days

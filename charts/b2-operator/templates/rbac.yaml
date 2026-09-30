@@ -1,0 +1,89 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "b2-operator.fullname" . }}-manager
+  labels:
+    {{- include "b2-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "b2-operator.fullname" . }}-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "b2-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Leader election, scoped to the release namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "b2-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b2-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "b2-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b2-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "b2-operator.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "b2-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Lets Prometheus scrape the authenticated metrics endpoint.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "b2-operator.fullname" . }}-metrics-reader
+  labels:
+    {{- include "b2-operator.labels" . | nindent 4 }}
+rules:
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+{{- if .Values.aggregateRolesToDefaultRoles }}
+---
+# Namespace admins and editors may manage Buckets and ApplicationKeys.
+# B2AccessPolicy and ClusterProviderConfig stay cluster-admin only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "b2-operator.fullname" . }}-editor
+  labels:
+    {{- include "b2-operator.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+  - apiGroups: ["b2.backblaze.com"]
+    resources: ["buckets", "applicationkeys"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["b2.backblaze.com"]
+    resources: ["buckets/status", "applicationkeys/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "b2-operator.fullname" . }}-viewer
+  labels:
+    {{- include "b2-operator.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: ["b2.backblaze.com"]
+    resources: ["buckets", "applicationkeys", "buckets/status", "applicationkeys/status"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

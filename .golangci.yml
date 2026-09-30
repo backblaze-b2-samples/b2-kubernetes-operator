@@ -1,0 +1,50 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - copyloopvar
+    - dupword
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nilerr
+    - noctx
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    gosec:
+      excludes:
+        - G101 # constant names like "applicationKey" are not credentials
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters: [gosec, dupword, prealloc, unparam]
+      - path: zz_generated
+        linters: [all]
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/backblaze-b2-samples/b2-operator

@@ -1,0 +1,340 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: applicationkeys.b2.backblaze.com
+spec:
+  group: b2.backblaze.com
+  names:
+    categories:
+    - b2
+    kind: ApplicationKey
+    listKind: ApplicationKeyList
+    plural: applicationkeys
+    shortNames:
+    - b2key
+    singular: applicationkey
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.bucketName
+      name: Bucket
+      type: string
+    - jsonPath: .status.secretName
+      name: Secret
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
+      type: string
+    - format: date-time
+      jsonPath: .status.expiresAt
+      name: Expires
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ApplicationKey is a scoped B2 application key, delivered to a
+          Secret.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ApplicationKeySpec is the desired B2 application key.
+            properties:
+              bucketName:
+                description: |-
+                  BucketName restricts the key to an existing bucket not managed in this
+                  namespace. Requires keys.allowExternalBuckets in a B2AccessPolicy.
+                maxLength: 63
+                minLength: 6
+                type: string
+              bucketRef:
+                description: |-
+                  BucketRef restricts the key to the bucket of a Bucket resource in this
+                  namespace. This is the recommended way to scope a key.
+                properties:
+                  name:
+                    description: Name of the Bucket resource.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              capabilities:
+                description: Capabilities granted to the key.
+                items:
+                  description: Capability is a B2 application key capability.
+                  enum:
+                  - listKeys
+                  - writeKeys
+                  - deleteKeys
+                  - listAllBucketNames
+                  - listBuckets
+                  - readBuckets
+                  - writeBuckets
+                  - deleteBuckets
+                  - readBucketRetentions
+                  - writeBucketRetentions
+                  - readBucketEncryption
+                  - writeBucketEncryption
+                  - readBucketNotifications
+                  - writeBucketNotifications
+                  - listFiles
+                  - readFiles
+                  - shareFiles
+                  - writeFiles
+                  - deleteFiles
+                  - readFileLegalHolds
+                  - writeFileLegalHolds
+                  - readFileRetentions
+                  - writeFileRetentions
+                  - bypassGovernance
+                  - readBucketLogging
+                  - writeBucketLogging
+                  type: string
+                maxItems: 32
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+              namePrefix:
+                description: NamePrefix restricts the key to files whose names start
+                  with it.
+                maxLength: 1024
+                minLength: 1
+                type: string
+              providerConfigRef:
+                default:
+                  name: default
+                description: ProviderConfigRef selects the B2 account.
+                properties:
+                  name:
+                    default: default
+                    description: Name of the ClusterProviderConfig.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                type: object
+              rotation:
+                description: Rotation configures automatic key replacement.
+                properties:
+                  every:
+                    description: |-
+                      Every rotates the key on this interval. Omit to rotate only when the
+                      spec changes, the Secret is lost, or the key nears expiry.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: rotation interval must be at least 1h
+                      rule: duration(self) >= duration('1h')
+                  gracePeriod:
+                    description: |-
+                      GracePeriod is how long a replaced key stays valid after the Secret is
+                      updated, so running workloads can pick up the new key. Defaults to 15m.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: gracePeriod must be between 0s and 168h
+                      rule: duration(self) >= duration('0s') && duration(self) <=
+                        duration('168h')
+                type: object
+              secretName:
+                description: |-
+                  SecretName is the Secret the key is written to, in this namespace.
+                  Defaults to the resource name. The operator will not overwrite a
+                  Secret it does not own. Immutable.
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                type: string
+              secretTemplate:
+                description: SecretTemplate adds labels and annotations to the Secret.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  labels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                type: object
+              validFor:
+                description: |-
+                  ValidFor makes the key expire this long after it is created. The
+                  operator replaces the key before it expires. At most 1000 days.
+                type: string
+                x-kubernetes-validations:
+                - message: validFor must be between 1h and 24000h (1000 days)
+                  rule: duration(self) >= duration('1h') && duration(self) <= duration('24000h')
+            required:
+            - capabilities
+            type: object
+            x-kubernetes-validations:
+            - message: set at most one of bucketRef and bucketName
+              rule: '!(has(self.bucketRef) && has(self.bucketName))'
+            - message: namePrefix requires bucketRef or bucketName
+              rule: '!has(self.namePrefix) || has(self.bucketRef) || has(self.bucketName)'
+            - message: secretName is immutable
+              rule: has(self.secretName) == has(oldSelf.secretName) && (!has(self.secretName)
+                || self.secretName == oldSelf.secretName)
+          status:
+            description: ApplicationKeyStatus is the observed state of an ApplicationKey.
+            properties:
+              bucketID:
+                description: BucketID the key is restricted to, if any.
+                type: string
+              bucketName:
+                description: BucketName the key is restricted to, if any.
+                type: string
+              conditions:
+                description: Conditions describe the current state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              createdAt:
+                description: CreatedAt is when the current key was created.
+                format: date-time
+                type: string
+              expiresAt:
+                description: ExpiresAt is when the current key expires, if ever.
+                format: date-time
+                type: string
+              keyID:
+                description: KeyID is the current B2 application key ID.
+                type: string
+              keyName:
+                description: KeyName is the current key's name in B2.
+                type: string
+              lastVerifiedTime:
+                description: LastVerifiedTime is when the current key was last confirmed
+                  valid.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the generation last reconciled.
+                format: int64
+                type: integer
+              pendingKeyName:
+                description: |-
+                  PendingKeyName is set while a key is being created, so that a key
+                  orphaned by a crash can be found and revoked.
+                type: string
+              retiringKeys:
+                description: |-
+                  RetiringKeys are replaced keys that will be revoked after their grace
+                  period.
+                items:
+                  description: RetiringKey is a replaced key awaiting revocation.
+                  properties:
+                    keyID:
+                      description: KeyID is the B2 application key ID.
+                      type: string
+                    revokeAfter:
+                      description: RevokeAfter is when the key will be deleted from
+                        B2.
+                      format: date-time
+                      type: string
+                  required:
+                  - keyID
+                  - revokeAfter
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - keyID
+                x-kubernetes-list-type: map
+              secretName:
+                description: SecretName holding the key.
+                type: string
+              serial:
+                description: Serial counts keys created for this resource.
+                format: int64
+                type: integer
+              specHash:
+                description: SpecHash identifies the spec the current key was created
+                  from.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,41 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "b2-operator.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b2-operator.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "b2-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: https-metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+{{- if .Values.metrics.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "b2-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b2-operator.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "b2-operator.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: https-metrics
+      scheme: https
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        # The operator serves a self-signed certificate by default.
+        insecureSkipVerify: true
+{{- end }}
+{{- end }}

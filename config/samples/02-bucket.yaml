@@ -1,0 +1,27 @@
+# Tenant: a private, encrypted bucket with lifecycle and CORS rules.
+apiVersion: b2.backblaze.com/v1alpha1
+kind: Bucket
+metadata:
+  name: uploads
+  namespace: shop
+spec:
+  bucketName: acme-shop-uploads
+  bucketType: allPrivate
+  bucketInfo:
+    team: shop
+  defaultEncryption:
+    mode: SSE-B2
+  lifecycleRules:
+    - fileNamePrefix: "tmp/"
+      daysFromUploadingToHiding: 1
+      daysFromHidingToDeleting: 1
+    - fileNamePrefix: ""
+      daysFromHidingToDeleting: 30
+      daysFromStartingToCancelingUnfinishedLargeFiles: 7
+  corsRules:
+    - name: storefront
+      allowedOrigins: ["https://shop.example.com"]
+      allowedOperations: [s3_get, s3_head, s3_put]
+      allowedHeaders: ["*"]
+      maxAgeSeconds: 3600
+  deletionPolicy: Retain

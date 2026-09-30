@@ -1,0 +1,20 @@
+# Tenant: a key restricted to one bucket and prefix, rotated every 30 days,
+# delivered to Secret "uploads-writer".
+apiVersion: b2.backblaze.com/v1alpha1
+kind: ApplicationKey
+metadata:
+  name: uploads-writer
+  namespace: shop
+spec:
+  bucketRef:
+    name: uploads
+  namePrefix: "images/"
+  capabilities: [listFiles, readFiles, writeFiles]
+  validFor: 2160h
+  rotation:
+    every: 720h
+    gracePeriod: 30m
+  secretTemplate:
+    annotations:
+      # e.g. restart consumers on rotation with stakater/Reloader
+      reloader.stakater.com/match: "true"
