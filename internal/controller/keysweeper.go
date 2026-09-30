@@ -98,13 +98,21 @@ func (s *KeySweeper) Sweep(ctx context.Context) error {
 		if len(keys) == 0 {
 			continue
 		}
+		// Keys belong to ApplicationKeys, or to Buckets (replication keys).
 		var aks b2v1.ApplicationKeyList
 		if err := s.APIReader.List(ctx, &aks); err != nil {
+			return err
+		}
+		var buckets b2v1.BucketList
+		if err := s.APIReader.List(ctx, &buckets); err != nil {
 			return err
 		}
 		live := map[string]bool{}
 		for _, ak := range aks.Items {
 			live[uid8(ak.UID)] = true
+		}
+		for _, b := range buckets.Items {
+			live[uid8(b.UID)] = true
 		}
 		for _, k := range keys {
 			parts := strings.SplitN(strings.TrimPrefix(k.KeyName, prefix), "-", 2)

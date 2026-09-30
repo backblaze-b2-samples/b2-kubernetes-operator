@@ -57,6 +57,8 @@ type BucketRequest struct {
 	Adopt               bool
 	Delete              bool
 	ComplianceRetention bool
+	Unencrypted         bool
+	Replication         bool
 }
 
 // KeyRequest describes an ApplicationKey to authorize.
@@ -142,6 +144,12 @@ func EvaluateBucket(policies []b2v1.B2AccessPolicy, nsLabels labels.Set, req Buc
 		}
 		if req.ComplianceRetention && !bp.AllowComplianceRetention {
 			why = append(why, "compliance-mode retention is not allowed")
+		}
+		if req.Unencrypted && !bp.AllowUnencrypted {
+			why = append(why, "unencrypted buckets are not allowed")
+		}
+		if req.Replication && !bp.AllowReplication {
+			why = append(why, "replication is not allowed")
 		}
 		if len(why) == 0 {
 			return Decision{Allowed: true}

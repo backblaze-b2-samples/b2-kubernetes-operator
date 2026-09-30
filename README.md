@@ -17,11 +17,17 @@ spec:
 
 The operator creates the key in B2, restricted to one bucket and prefix. It delivers the key to a Secret that any S3 SDK can read, and rotates it every 30 days without downtime.
 
+## Who it's for
+
+- **Any Kubernetes team using B2.** Point the operator at your B2 account and manage buckets and scoped keys declaratively. Guardrails keep teams on a shared cluster within their own buckets. This is the [Quick start](#quick-start).
+- **Hosting providers, GPU clouds and resellers.** With the Backblaze [Partner API](docs/partner.md), the operator also creates a separate B2 account for each customer and region, which you can build self-service storage on. See [docs/integration.md](docs/integration.md). This layer is optional and needs Partner API access.
+
 > **Status:** `v1alpha1`. The API may change before `v1`. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Features
 
-- **Buckets:** type, bucket info, lifecycle rules, CORS rules, default encryption (SSE-B2), and Object Lock with default retention.
+- **Buckets:** type, bucket info, lifecycle rules, CORS rules, SSE-B2 encryption (on by default), Object Lock with default retention, and Cloud Replication across accounts and regions.
+- **Customer accounts:** one B2 account per customer per region through the [Partner API](docs/partner.md). The key B2 returns once is stored and never discarded, and a provider config and access policy are published for each account.
 - **Application keys:** restricted to a bucket, a file-name prefix and a set of capabilities, with optional expiry. Delivered to a Secret with S3-compatible variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, `AWS_REGION`).
 - **Zero-downtime rotation:** the operator creates the new key, then updates the Secret, and revokes the old key only after a grace period. Rotation can run on a schedule, before expiry, or after a spec change, a lost Secret, or a key revoked outside Kubernetes.
 - **Multi-tenant guardrails:** a cluster-scoped `B2AccessPolicy` controls, per namespace, which bucket names, capabilities, key lifetimes and bucket settings are allowed. It is enforced by the operator before every B2 call, not only at admission.
@@ -73,6 +79,7 @@ envFrom:
 | `B2AccessPolicy` | Cluster | Cluster admin | What each namespace may do |
 | `Bucket` | Namespace | App team | A B2 bucket |
 | `ApplicationKey` | Namespace | App team | A scoped key, delivered to a Secret |
+| `B2Account` | Cluster | Platform | A customer account created through the Partner API |
 
 `kubectl explain bucket.spec` documents every field. More examples are in [config/samples](config/samples).
 
@@ -140,6 +147,11 @@ make run         # run against your current kubeconfig
 ```
 
 The B2 client (`internal/b2`) is a small, dependency-free client for the Native API v4. It re-authorizes when tokens expire and retries idempotent calls with backoff, honouring `Retry-After`. It never retries creates. `internal/b2/b2fake` is an in-memory B2 used by every test layer. See [docs/architecture.md](docs/architecture.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Building a storage product on it
+
+- [docs/partner.md](docs/partner.md): per-customer, per-region accounts through the Partner API.
+- [docs/integration.md](docs/integration.md): a "new bucket" button, multi-region buckets, tenant offboarding, and where to run the operator.
 
 ## Migrating from `mgruszkiewicz/backblaze-operator`
 

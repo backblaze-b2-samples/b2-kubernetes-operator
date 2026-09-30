@@ -98,6 +98,36 @@ spec:
                 - name
                 - namespace
                 type: object
+              partner:
+                description: |-
+                  Partner enables provisioning B2 accounts (B2Account) through the
+                  Backblaze Partner API. The credentials must be the master application
+                  key of the Group admin account.
+                properties:
+                  groupID:
+                    description: |-
+                      GroupID is the Group that new accounts join. It must be a managed
+                      Group with B2 enabled.
+                    minLength: 1
+                    type: string
+                  memberEmailTemplate:
+                    description: |-
+                      MemberEmailTemplate generates each account's email address from
+                      {customer} and {region}, e.g. "{customer}-{region}@hosting-company.com".
+                      B2 requires a unique, well-formed address per account; it does not
+                      have to receive mail. Changing the template does not rename existing
+                      accounts.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: memberEmailTemplate must contain {customer} and {region}
+                      rule: self.contains('{customer}') && self.contains('{region}')
+                    - message: memberEmailTemplate must be an email address with a
+                        domain
+                      rule: self.matches('^[^@ ]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}$')
+                required:
+                - groupID
+                - memberEmailTemplate
+                type: object
             required:
             - credentialsSecretRef
             type: object

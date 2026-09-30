@@ -63,8 +63,9 @@ spec:
           spec:
             description: |-
               BucketSpec is the desired state of a B2 bucket. Lifecycle rules, CORS
-              rules and bucket info are authoritative: whatever is in B2 is replaced by
-              the spec. Default encryption and Object Lock are only managed when set.
+              rules, bucket info, default encryption and replication are authoritative:
+              whatever is in B2 is replaced by the spec. Object Lock is only managed
+              when set.
             properties:
               adoptExisting:
                 description: |-
@@ -181,9 +182,12 @@ spec:
                 - name
                 x-kubernetes-list-type: map
               defaultEncryption:
+                default:
+                  mode: SSE-B2
                 description: |-
-                  DefaultEncryption, when set, is enforced. When omitted, the bucket's
-                  encryption setting is left as it is.
+                  DefaultEncryption is the bucket's default server-side encryption.
+                  Defaults to SSE-B2; mode None requires buckets.allowUnencrypted in a
+                  B2AccessPolicy.
                 properties:
                   mode:
                     description: Mode is SSE-B2 (Backblaze-managed keys, AES-256)
@@ -303,6 +307,65 @@ spec:
                     minLength: 1
                     type: string
                 type: object
+              replication:
+                description: |-
+                  Replication replicates new (and optionally existing) files to other
+                  Buckets in this namespace, which may be in other B2 accounts and
+                  regions. The operator creates and manages the replication keys in
+                  both accounts. B2 allows at most two rules per source bucket.
+                items:
+                  description: ReplicationRule is a Cloud Replication rule from this
+                    bucket.
+                  properties:
+                    destinationBucketRef:
+                      description: DestinationBucketRef names the destination Bucket
+                        in this namespace.
+                      properties:
+                        name:
+                          description: Name of the Bucket resource.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    enabled:
+                      default: true
+                      description: Enabled pauses the rule when false.
+                      type: boolean
+                    fileNamePrefix:
+                      description: FileNamePrefix limits replication to files with
+                        this prefix.
+                      maxLength: 1024
+                      type: string
+                    includeExistingFiles:
+                      description: |-
+                        IncludeExistingFiles also replicates files that existed before the
+                        rule was created.
+                      type: boolean
+                    name:
+                      description: Name of the rule in B2.
+                      maxLength: 50
+                      minLength: 1
+                      pattern: ^[A-Za-z0-9-]+$
+                      type: string
+                    priority:
+                      default: 1
+                      description: Priority resolves conflicts between rules; higher
+                        wins.
+                      format: int32
+                      maximum: 2147483647
+                      minimum: 1
+                      type: integer
+                  required:
+                  - destinationBucketRef
+                  - name
+                  type: object
+                maxItems: 2
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             required:
             - bucketName
             type: object
@@ -385,6 +448,46 @@ spec:
                 description: ObservedGeneration is the generation last reconciled.
                 format: int64
                 type: integer
+              replication:
+                description: Replication reports the replication keys the operator
+                  manages.
+                properties:
+                  destinations:
+                    description: Destinations are the buckets replicated to.
+                    items:
+                      description: ReplicationDestinationStatus is one destination
+                        bucket.
+                      properties:
+                        bucket:
+                          description: Bucket is the destination Bucket resource.
+                          type: string
+                        bucketID:
+                          description: BucketID is the destination B2 bucket.
+                          type: string
+                        keyID:
+                          description: KeyID is the key, in the destination account,
+                            that writes replicated files.
+                          type: string
+                        providerConfig:
+                          description: ProviderConfig is the destination bucket's
+                            account.
+                          type: string
+                      required:
+                      - bucket
+                      - bucketID
+                      - keyID
+                      - providerConfig
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - bucketID
+                    x-kubernetes-list-type: map
+                  sourceKeyID:
+                    description: |-
+                      SourceKeyID is the key, in this bucket's account, that B2 uses to read
+                      files for replication.
+                    type: string
+                type: object
               revision:
                 description: Revision is the B2 bucket revision last observed.
                 format: int64

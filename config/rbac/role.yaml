@@ -28,6 +28,7 @@ rules:
   - b2.backblaze.com
   resources:
   - applicationkeys
+  - b2accounts
   - buckets
   verbs:
   - get
@@ -39,6 +40,7 @@ rules:
   - b2.backblaze.com
   resources:
   - applicationkeys/finalizers
+  - b2accounts/finalizers
   - buckets/finalizers
   verbs:
   - update
@@ -46,6 +48,7 @@ rules:
   - b2.backblaze.com
   resources:
   - applicationkeys/status
+  - b2accounts/status
   - buckets/status
   - clusterproviderconfigs/status
   verbs:
@@ -58,8 +61,12 @@ rules:
   - b2accesspolicies
   - clusterproviderconfigs
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - events.k8s.io

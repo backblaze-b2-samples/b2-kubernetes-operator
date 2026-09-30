@@ -43,6 +43,7 @@ const DefaultBaseURL = "https://api.backblazeb2.com"
 
 const (
 	apiPrefix        = "/b2api/v4/"
+	groupsAPIPrefix  = "/b2api/v3/"
 	maxResponseBytes = 8 << 20
 	defaultTimeout   = 60 * time.Second
 )
@@ -277,16 +278,70 @@ func (c *Client) KeyExists(ctx context.Context, applicationKeyID string) (bool, 
 	return len(keys) > 0 && keys[0].ApplicationKeyID == applicationKeyID, nil
 }
 
-// call performs an authorized API call. body builds the request from the
-// current authorization so it can be rebuilt after re-authorizing.
+// FindGroupMember returns the member of groupID with the given email, or nil.
+func (c *Client) FindGroupMember(ctx context.Context, groupID, email string) (*GroupMember, error) {
+	var resp listGroupMembersResponse
+	err := c.groupsCall(ctx, "b2_list_group_members", true, func(a *Authorization) any {
+		return listGroupMembersRequest{AdminAccountID: a.AccountID, GroupID: groupID, StartEmail: email, MaxMemberCount: 1}
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	for i := range resp.GroupMembers {
+		if strings.EqualFold(resp.GroupMembers[i].Email, email) {
+			return &resp.GroupMembers[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// CreateGroupMember creates a B2 account in groupID. The returned key is the
+// only copy B2 will ever provide; the caller must store it. Never retried.
+func (c *Client) CreateGroupMember(ctx context.Context, groupID, email, region string) (*CreateGroupMemberResponse, error) {
+	var resp CreateGroupMemberResponse
+	err := c.groupsCall(ctx, "b2_create_group_member", false, func(a *Authorization) any {
+		return createGroupMemberRequest{AdminAccountID: a.AccountID, GroupID: groupID, MemberEmail: email, Region: region}
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// EjectGroupMember removes an account from groupID. The account and its data
+// continue to exist outside the Group.
+func (c *Client) EjectGroupMember(ctx context.Context, groupID, memberAccountID string) error {
+	return c.groupsCall(ctx, "b2_eject_group_member", true, func(a *Authorization) any {
+		return ejectGroupMemberRequest{AdminAccountID: a.AccountID, GroupID: groupID, MemberAccountID: memberAccountID}
+	}, nil)
+}
+
+func (c *Client) groupsCall(ctx context.Context, op string, idempotent bool, body func(*Authorization) any, out any) error {
+	return c.callAt(ctx, op, idempotent, func(a *Authorization) string {
+		base := c.opts.BaseURL
+		if g := a.APIInfo.GroupsAPI; g != nil && g.GroupsAPIURL != "" {
+			base = g.GroupsAPIURL
+		}
+		return strings.TrimRight(base, "/") + groupsAPIPrefix + op
+	}, body, out)
+}
+
+// call performs an authorized storage API call. body builds the request from
+// the current authorization so it can be rebuilt after re-authorizing.
 func (c *Client) call(ctx context.Context, op string, idempotent bool, body func(*Authorization) any, out any) error {
+	return c.callAt(ctx, op, idempotent, func(a *Authorization) string {
+		return strings.TrimRight(a.APIInfo.StorageAPI.APIURL, "/") + apiPrefix + op
+	}, body, out)
+}
+
+func (c *Client) callAt(ctx context.Context, op string, idempotent bool, endpoint func(*Authorization) string, body func(*Authorization) any, out any) error {
 	reauthorized := false
 	for attempt := 0; ; attempt++ {
 		auth, err := c.currentAuth(ctx)
 		if err != nil {
 			return err
 		}
-		err = c.do(ctx, op, auth, body(auth), out)
+		err = c.do(ctx, op, endpoint(auth), auth, body(auth), out)
 		if err == nil {
 			return nil
 		}
@@ -305,12 +360,11 @@ func (c *Client) call(ctx context.Context, op string, idempotent bool, body func
 	}
 }
 
-func (c *Client) do(ctx context.Context, op string, auth *Authorization, reqBody any, out any) (err error) {
+func (c *Client) do(ctx context.Context, op, endpoint string, auth *Authorization, reqBody any, out any) error {
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("b2 %s: encoding request: %w", op, err)
 	}
-	endpoint := strings.TrimRight(auth.APIInfo.StorageAPI.APIURL, "/") + apiPrefix + op
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("b2 %s: %w", op, err)

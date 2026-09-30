@@ -1,0 +1,19 @@
+# Platform administrator: the Partner API Group admin account.
+#
+# Requires the Backblaze Partner API, which Backblaze sales enables for
+# committed-contract customers, and a Group with B2 enabled. The credentials
+# must be the Group admin account's master application key.
+#   kubectl -n b2-operator-system create secret generic b2-partner-admin \
+#     --from-literal=applicationKeyId=<masterKeyID> --from-literal=applicationKey=<masterKey>
+apiVersion: b2.backblaze.com/v1alpha1
+kind: ClusterProviderConfig
+metadata:
+  name: partner
+spec:
+  credentialsSecretRef:
+    namespace: b2-operator-system
+    name: b2-partner-admin
+  partner:
+    groupID: "4a48fe8875c6214145260818"
+    # B2 needs a unique, well-formed email per account. It is never mailed.
+    memberEmailTemplate: "{customer}-{region}@hosting-company.com"

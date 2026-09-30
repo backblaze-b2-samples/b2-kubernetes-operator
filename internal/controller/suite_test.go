@@ -55,6 +55,7 @@ const (
 	tenantLabel      = "b2-test/tenant"
 	externalLabel    = "b2-test/external"
 	testClusterID    = "testclst"
+	partnerConfig    = "partner"
 	operatorNS       = "b2-operator-system"
 	credsSecretName  = "b2-credentials"
 	testGracePeriod  = 2 * time.Second
@@ -66,6 +67,7 @@ var (
 	k8s     client.Client
 	fakeB2  *b2fake.Server
 	sweeper *KeySweeper
+	groupID string
 	testCtx context.Context
 	skipMsg string
 )
@@ -130,6 +132,7 @@ func runSuite(m *testing.M) int {
 	must((&ClusterProviderConfigReconciler{Deps: deps}).SetupWithManager(mgr))
 	must((&BucketReconciler{Deps: deps}).SetupWithManager(mgr))
 	must((&ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
+	must((&B2AccountReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
 
 	var cancel context.CancelFunc
 	testCtx, cancel = context.WithCancel(context.Background())
@@ -150,11 +153,20 @@ func runSuite(m *testing.M) int {
 // provider config, and a policy for namespaces labelled as tenants.
 func seedCluster() error {
 	ctx := context.Background()
+	groupID = fakeB2.AddGroup("Hosting Co customers")
 	objs := []client.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: operatorNS}},
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: credsSecretName, Namespace: operatorNS},
 			StringData: map[string]string{"applicationKeyId": fakeB2.MasterKeyID, "applicationKey": fakeB2.MasterKey},
+		},
+		&b2v1.ClusterProviderConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: partnerConfig},
+			Spec: b2v1.ClusterProviderConfigSpec{
+				APIURL:               fakeB2.URL(),
+				CredentialsSecretRef: b2v1.CredentialsSecretReference{Namespace: operatorNS, Name: credsSecretName},
+				Partner:              &b2v1.PartnerSettings{GroupID: groupID, MemberEmailTemplate: "{customer}-{region}@hosting.example.com"},
+			},
 		},
 		&b2v1.ClusterProviderConfig{
 			ObjectMeta: metav1.ObjectMeta{Name: "default"},

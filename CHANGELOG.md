@@ -7,5 +7,8 @@
 - `B2AccessPolicy` for per-namespace allow-lists, enforced by the controllers (default deny).
 - `Bucket`: bucket type, bucket info, lifecycle rules, CORS rules, default SSE-B2 encryption, Object Lock and default retention. Ownership is recorded in B2, adoption is explicit, drift is corrected, and `deletionPolicy` defaults to `Retain`.
 - `ApplicationKey`: bucket, prefix and capability scoping, expiry, scheduled rotation, zero-downtime replacement with a grace period, crash-safe creation, revocation on policy violation, and S3-compatible Secret output.
+- `B2Account`: per-customer, per-region accounts through the Partner API, with generated email addresses, durable storage of the returned key, a published provider config and access policy, and Retain/Eject deletion.
+- Cloud Replication between Buckets, across accounts and regions, with managed replication keys.
+- SSE-B2 encryption by default; unencrypted buckets and replication must be allowed by policy.
 - Native API v4 client with re-authorization, retries and metrics; an in-memory fake B2 for tests.
 - Helm chart, multi-arch distroless image, CI (lint, envtest, kind e2e, govulncheck, Trivy), and a signed release pipeline.

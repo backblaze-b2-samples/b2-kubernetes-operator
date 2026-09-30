@@ -1,0 +1,24 @@
+# Customer namespace: a "multi-region bucket" is two Buckets in the
+# customer's per-region accounts, with Cloud Replication from west to east.
+# The operator creates and manages the replication keys in both accounts.
+apiVersion: b2.backblaze.com/v1alpha1
+kind: Bucket
+metadata:
+  name: datasets-east
+  namespace: customer-a
+spec:
+  providerConfigRef: {name: customer-a-east}
+  bucketName: customer-a-datasets-east
+---
+apiVersion: b2.backblaze.com/v1alpha1
+kind: Bucket
+metadata:
+  name: datasets
+  namespace: customer-a
+spec:
+  providerConfigRef: {name: customer-a-west}
+  bucketName: customer-a-datasets-west
+  replication:
+    - name: to-east
+      destinationBucketRef: {name: datasets-east}
+      includeExistingFiles: true

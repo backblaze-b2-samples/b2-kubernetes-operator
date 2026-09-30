@@ -163,6 +163,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.B2AccountReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "B2Account")
+		os.Exit(1)
+	}
 	if err := mgr.Add(&controller.KeySweeper{Deps: deps, APIReader: mgr.GetAPIReader(), Interval: sweepInterval}); err != nil {
 		setupLog.Error(err, "unable to add key sweeper")
 		os.Exit(1)

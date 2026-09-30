@@ -166,9 +166,44 @@ type ObjectLock struct {
 	DefaultRetention *DefaultRetention `json:"defaultRetention,omitempty"`
 }
 
+// ReplicationRule is a Cloud Replication rule from this bucket.
+type ReplicationRule struct {
+	// Name of the rule in B2.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=50
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9-]+$`
+	Name string `json:"name"`
+
+	// DestinationBucketRef names the destination Bucket in this namespace.
+	DestinationBucketRef LocalBucketReference `json:"destinationBucketRef"`
+
+	// FileNamePrefix limits replication to files with this prefix.
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	FileNamePrefix string `json:"fileNamePrefix,omitempty"`
+
+	// IncludeExistingFiles also replicates files that existed before the
+	// rule was created.
+	// +optional
+	IncludeExistingFiles bool `json:"includeExistingFiles,omitempty"`
+
+	// Priority resolves conflicts between rules; higher wins.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=2147483647
+	// +kubebuilder:default=1
+	// +optional
+	Priority int32 `json:"priority,omitempty"`
+
+	// Enabled pauses the rule when false.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
 // BucketSpec is the desired state of a B2 bucket. Lifecycle rules, CORS
-// rules and bucket info are authoritative: whatever is in B2 is replaced by
-// the spec. Default encryption and Object Lock are only managed when set.
+// rules, bucket info, default encryption and replication are authoritative:
+// whatever is in B2 is replaced by the spec. Object Lock is only managed
+// when set.
 type BucketSpec struct {
 	// ProviderConfigRef selects the B2 account.
 	// +kubebuilder:default={name: default}
@@ -211,8 +246,10 @@ type BucketSpec struct {
 	// +optional
 	CORSRules []CORSRule `json:"corsRules,omitempty"`
 
-	// DefaultEncryption, when set, is enforced. When omitted, the bucket's
-	// encryption setting is left as it is.
+	// DefaultEncryption is the bucket's default server-side encryption.
+	// Defaults to SSE-B2; mode None requires buckets.allowUnencrypted in a
+	// B2AccessPolicy.
+	// +kubebuilder:default={mode: SSE-B2}
 	// +optional
 	DefaultEncryption *DefaultEncryption `json:"defaultEncryption,omitempty"`
 
@@ -220,6 +257,16 @@ type BucketSpec struct {
 	// Lock settings are left as they are.
 	// +optional
 	ObjectLock *ObjectLock `json:"objectLock,omitempty"`
+
+	// Replication replicates new (and optionally existing) files to other
+	// Buckets in this namespace, which may be in other B2 accounts and
+	// regions. The operator creates and manages the replication keys in
+	// both accounts. B2 allows at most two rules per source bucket.
+	// +kubebuilder:validation:MaxItems=2
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Replication []ReplicationRule `json:"replication,omitempty"`
 
 	// DeletionPolicy decides whether deleting this resource deletes the
 	// bucket. Defaults to Retain.
@@ -261,6 +308,10 @@ type BucketStatus struct {
 	// +optional
 	ObjectLockEnabled bool `json:"objectLockEnabled,omitempty"`
 
+	// Replication reports the replication keys the operator manages.
+	// +optional
+	Replication *ReplicationStatus `json:"replication,omitempty"`
+
 	// LastSyncTime is when the bucket was last compared with B2.
 	// +optional
 	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
@@ -298,4 +349,30 @@ type BucketList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Bucket `json:"items"`
+}
+
+// ReplicationStatus reports replication managed from a source bucket.
+type ReplicationStatus struct {
+	// SourceKeyID is the key, in this bucket's account, that B2 uses to read
+	// files for replication.
+	// +optional
+	SourceKeyID string `json:"sourceKeyID,omitempty"`
+
+	// Destinations are the buckets replicated to.
+	// +listType=map
+	// +listMapKey=bucketID
+	// +optional
+	Destinations []ReplicationDestinationStatus `json:"destinations,omitempty"`
+}
+
+// ReplicationDestinationStatus is one destination bucket.
+type ReplicationDestinationStatus struct {
+	// Bucket is the destination Bucket resource.
+	Bucket string `json:"bucket"`
+	// BucketID is the destination B2 bucket.
+	BucketID string `json:"bucketID"`
+	// ProviderConfig is the destination bucket's account.
+	ProviderConfig string `json:"providerConfig"`
+	// KeyID is the key, in the destination account, that writes replicated files.
+	KeyID string `json:"keyID"`
 }

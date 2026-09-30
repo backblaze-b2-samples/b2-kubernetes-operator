@@ -1,0 +1,45 @@
+# Platform administrator: one B2 account per customer per region.
+# Each creates account <customer>-<region>@hosting-company.com, stores its
+# key in b2-operator-system/b2-account-<name>, and publishes a
+# ClusterProviderConfig named after the resource.
+apiVersion: b2.backblaze.com/v1alpha1
+kind: B2Account
+metadata:
+  name: customer-a-west
+spec:
+  partnerConfigRef: {name: partner}
+  customer: customer-a
+  region: us-west
+  credentialsSecretRef:
+    namespace: b2-operator-system
+  # Grant the customer's namespaces use of this account.
+  access:
+    namespaceSelector:
+      matchLabels: {customer: customer-a}
+    buckets:
+      namePatterns: ["{namespace}-*"]
+      allowReplication: true
+    keys:
+      allowedCapabilities: [listBuckets, listFiles, readFiles, writeFiles, deleteFiles]
+      maxValidity: 2160h
+  deletionPolicy: Retain
+---
+apiVersion: b2.backblaze.com/v1alpha1
+kind: B2Account
+metadata:
+  name: customer-a-east
+spec:
+  partnerConfigRef: {name: partner}
+  customer: customer-a
+  region: us-east
+  credentialsSecretRef:
+    namespace: b2-operator-system
+  access:
+    namespaceSelector:
+      matchLabels: {customer: customer-a}
+    buckets:
+      namePatterns: ["{namespace}-*"]
+    keys:
+      allowedCapabilities: [listBuckets, listFiles, readFiles]
+      maxValidity: 2160h
+  deletionPolicy: Retain

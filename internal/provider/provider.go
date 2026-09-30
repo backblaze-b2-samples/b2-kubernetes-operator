@@ -51,6 +51,8 @@ type Account struct {
 	S3Endpoint   string
 	S3Region     string
 	Capabilities []string
+	// PartnerAPI reports whether the account may use the Partner (Groups) API.
+	PartnerAPI bool
 	// KeyExpirationMillis is the operator key's expiry, if any.
 	KeyExpirationMillis *int64
 }
@@ -126,6 +128,7 @@ func (r *Registry) Refresh(ctx context.Context, pc *b2v1.ClusterProviderConfig) 
 		S3Region:            S3Region(auth.APIInfo.StorageAPI.S3APIURL),
 		Capabilities:        auth.APIInfo.StorageAPI.Allowed.Capabilities,
 		KeyExpirationMillis: auth.ApplicationKeyExpirationTimestamp,
+		PartnerAPI:          auth.APIInfo.GroupsAPI != nil,
 	}
 
 	r.mu.Lock()

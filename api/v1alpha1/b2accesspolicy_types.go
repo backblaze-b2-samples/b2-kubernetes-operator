@@ -46,6 +46,15 @@ type BucketPolicy struct {
 	// +optional
 	AllowDeletion bool `json:"allowDeletion,omitempty"`
 
+	// AllowUnencrypted permits defaultEncryption mode None.
+	// +optional
+	AllowUnencrypted bool `json:"allowUnencrypted,omitempty"`
+
+	// AllowReplication permits Cloud Replication rules. Replication to
+	// another region or account incurs storage in the destination.
+	// +optional
+	AllowReplication bool `json:"allowReplication,omitempty"`
+
 	// AllowComplianceRetention permits Object Lock default retention in
 	// compliance mode. Compliance-mode files cannot be deleted by anyone
 	// until their retention expires, so this can lock in storage costs.

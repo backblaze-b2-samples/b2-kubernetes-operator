@@ -138,12 +138,18 @@ func (r *BucketReconciler) reconcile(ctx context.Context, bkt *b2v1.Bucket) (ctr
 		}
 	}
 
-	now := metav1.NewTime(r.now())
 	bkt.Status.BucketID = observed.BucketID
-	bkt.Status.Revision = int64(observed.Revision)
 	bkt.Status.S3Endpoint = acct.S3Endpoint
 	bkt.Status.S3Region = acct.S3Region
 	bkt.Status.ObjectLockEnabled = fileLockEnabled(observed)
+
+	observed, se = r.reconcileReplication(ctx, acct, bkt, observed)
+	if se != nil {
+		return result(se, setReady)
+	}
+
+	now := metav1.NewTime(r.now())
+	bkt.Status.Revision = int64(observed.Revision)
 	bkt.Status.LastSyncTime = &now
 	msg := "Bucket is in sync with B2"
 	if len(warnings) > 0 {
@@ -175,6 +181,8 @@ func bucketPolicyRequest(bkt *b2v1.Bucket, adopt bool) policy.BucketRequest {
 		Delete:         bkt.Spec.DeletionPolicy == b2v1.DeletionPolicyDelete,
 		ComplianceRetention: bkt.Spec.ObjectLock != nil && bkt.Spec.ObjectLock.DefaultRetention != nil &&
 			bkt.Spec.ObjectLock.DefaultRetention.Mode == b2v1.RetentionModeCompliance,
+		Unencrypted: bkt.Spec.DefaultEncryption != nil && bkt.Spec.DefaultEncryption.Mode == b2v1.EncryptionModeNone,
+		Replication: len(bkt.Spec.Replication) > 0,
 	}
 }
 
@@ -379,10 +387,32 @@ func (r *BucketReconciler) finalize(ctx context.Context, bkt *b2v1.Bucket) (ctrl
 		if err := r.Client.List(ctx, &keys, client.InNamespace(bkt.Namespace), client.MatchingFields{indexBucketRef: bkt.Name}); err != nil {
 			return ctrl.Result{}, err
 		}
-		if n := len(keys.Items); n > 0 {
+		// Only keys that hold (or may hold) credentials block deletion; one
+		// that was never issued, e.g. denied by policy, has nothing to revoke.
+		live := slices.DeleteFunc(keys.Items, func(k b2v1.ApplicationKey) bool {
+			return k.Status.KeyID == "" && k.Status.PendingKeyName == "" && len(k.Status.RetiringKeys) == 0
+		})
+		if n := len(live); n > 0 {
 			return fail(waitFor(b2v1.ReasonDeletionBlocked, time.Minute,
-				"%d ApplicationKey(s) still reference this bucket (e.g. %s); delete them first", n, keys.Items[0].Name))
+				"%d ApplicationKey(s) with live credentials still reference this bucket (e.g. %s); delete them first", n, live[0].Name))
 		}
+		var sources b2v1.BucketList
+		if err := r.Client.List(ctx, &sources, client.InNamespace(bkt.Namespace), client.MatchingFields{indexReplicationDest: bkt.Name}); err != nil {
+			return ctrl.Result{}, err
+		}
+		if n := len(sources.Items); n > 0 {
+			return fail(waitFor(b2v1.ReasonDeletionBlocked, time.Minute,
+				"%d Bucket(s) replicate into this bucket (e.g. %s); remove their replication rules first", n, sources.Items[0].Name))
+		}
+		// Stop replicating from this bucket and revoke its replication keys.
+		teardown := bkt.DeepCopy()
+		teardown.Spec.Replication = nil
+		updated, se := r.reconcileReplication(ctx, acct, teardown, observed)
+		if se != nil {
+			return fail(se)
+		}
+		bkt.Status.Replication = teardown.Status.Replication
+		observed = updated
 		deleteBucket := bkt.Spec.DeletionPolicy == b2v1.DeletionPolicyDelete
 		if deleteBucket {
 			if se := r.checkPolicy(ctx, bkt, false); se != nil {
@@ -563,12 +593,24 @@ func (r *BucketReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}); err != nil {
 		return err
 	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &b2v1.Bucket{}, indexReplicationDest, func(o client.Object) []string {
+		rules := o.(*b2v1.Bucket).Spec.Replication
+		out := make([]string, 0, len(rules))
+		for _, rule := range rules {
+			out = append(out, rule.DestinationBucketRef.Name)
+		}
+		return out
+	}); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&b2v1.Bucket{}, builder.WithPredicates(specOrDeletionChanged())).
 		Watches(&b2v1.ClusterProviderConfig{},
 			handler.EnqueueRequestsFromMapFunc(r.bucketsForProviderConfig),
 			builder.WithPredicates(readinessChanged())).
 		Watches(&b2v1.B2AccessPolicy{}, handler.EnqueueRequestsFromMapFunc(r.allBuckets)).
+		Watches(&b2v1.Bucket{}, handler.EnqueueRequestsFromMapFunc(r.replicationPeers),
+			builder.WithPredicates(predicate.Or[client.Object](specOrDeletionChanged(), bucketReadinessChanged()))).
 		Watches(&b2v1.ApplicationKey{}, handler.EnqueueRequestsFromMapFunc(referencedBucket),
 			builder.WithPredicates(predicate.Funcs{
 				CreateFunc: func(event.CreateEvent) bool { return false },
@@ -589,6 +631,21 @@ func referencedBucket(_ context.Context, o client.Object) []reconcile.Request {
 		return nil
 	}
 	return []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: k.Namespace, Name: k.Spec.BucketRef.Name}}}
+}
+
+// replicationPeers maps a Bucket to the buckets it replicates to (which may
+// be waiting for the rule to go before they can be deleted) and the buckets
+// replicating into it (which may be waiting for it to become ready).
+func (r *BucketReconciler) replicationPeers(ctx context.Context, o client.Object) []reconcile.Request {
+	bkt, ok := o.(*b2v1.Bucket)
+	if !ok {
+		return nil
+	}
+	var out []reconcile.Request
+	for _, rule := range bkt.Spec.Replication {
+		out = append(out, reconcile.Request{NamespacedName: client.ObjectKey{Namespace: bkt.Namespace, Name: rule.DestinationBucketRef.Name}})
+	}
+	return append(out, r.listRequests(ctx, client.InNamespace(bkt.Namespace), client.MatchingFields{indexReplicationDest: bkt.Name})...)
 }
 
 func (r *BucketReconciler) bucketsForProviderConfig(ctx context.Context, o client.Object) []reconcile.Request {

@@ -78,6 +78,14 @@ spec:
                   allowPublic:
                     description: AllowPublic permits bucketType allPublic.
                     type: boolean
+                  allowReplication:
+                    description: |-
+                      AllowReplication permits Cloud Replication rules. Replication to
+                      another region or account incurs storage in the destination.
+                    type: boolean
+                  allowUnencrypted:
+                    description: AllowUnencrypted permits defaultEncryption mode None.
+                    type: boolean
                   namePatterns:
                     description: |-
                       NamePatterns are glob patterns (`*` matches any run of characters) that

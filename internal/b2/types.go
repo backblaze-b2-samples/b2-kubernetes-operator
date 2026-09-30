@@ -52,6 +52,13 @@ type Authorization struct {
 
 type APIInfo struct {
 	StorageAPI StorageAPI `json:"storageApi"`
+	// GroupsAPI is present for accounts enabled for the Partner API.
+	GroupsAPI *GroupsAPI `json:"groupsApi,omitempty"`
+}
+
+type GroupsAPI struct {
+	GroupsAPIURL string   `json:"groupsApiUrl"`
+	Capabilities []string `json:"capabilities"`
 }
 
 type StorageAPI struct {
@@ -127,19 +134,55 @@ type ProtectedFileLock struct {
 	Value                    *FileLockValue `json:"value"`
 }
 
+// ReplicationRule is one Cloud Replication rule on a source bucket.
+type ReplicationRule struct {
+	ReplicationRuleName  string `json:"replicationRuleName"`
+	DestinationBucketID  string `json:"destinationBucketId"`
+	FileNamePrefix       string `json:"fileNamePrefix"`
+	IncludeExistingFiles bool   `json:"includeExistingFiles"`
+	IsEnabled            bool   `json:"isEnabled"`
+	Priority             int32  `json:"priority"`
+}
+
+// ReplicationSource configures a bucket as a replication source. All rules
+// on a bucket share one source key.
+type ReplicationSource struct {
+	ReplicationRules       []ReplicationRule `json:"replicationRules"`
+	SourceApplicationKeyID *string           `json:"sourceApplicationKeyId,omitempty"`
+}
+
+// ReplicationDestination maps source keys to the destination keys that
+// write replicated files into this bucket.
+type ReplicationDestination struct {
+	SourceToDestinationKeyMapping map[string]string `json:"sourceToDestinationKeyMapping"`
+}
+
+// ReplicationConfiguration is sent to b2_update_bucket. A side left nil is
+// not changed by B2.
+type ReplicationConfiguration struct {
+	AsReplicationSource      *ReplicationSource      `json:"asReplicationSource,omitempty"`
+	AsReplicationDestination *ReplicationDestination `json:"asReplicationDestination,omitempty"`
+}
+
+type ProtectedReplication struct {
+	IsClientAuthorizedToRead bool                      `json:"isClientAuthorizedToRead"`
+	Value                    *ReplicationConfiguration `json:"value"`
+}
+
 // Bucket is a bucket as returned by list/create/update/delete.
 type Bucket struct {
-	AccountID                   string             `json:"accountId"`
-	BucketID                    string             `json:"bucketId"`
-	BucketName                  string             `json:"bucketName"`
-	BucketType                  string             `json:"bucketType"`
-	BucketInfo                  map[string]string  `json:"bucketInfo"`
-	CORSRules                   []CORSRule         `json:"corsRules"`
-	LifecycleRules              []LifecycleRule    `json:"lifecycleRules"`
-	DefaultServerSideEncryption *ProtectedSSE      `json:"defaultServerSideEncryption,omitempty"`
-	FileLockConfiguration       *ProtectedFileLock `json:"fileLockConfiguration,omitempty"`
-	Revision                    Revision           `json:"revision"`
-	Options                     []string           `json:"options,omitempty"`
+	AccountID                   string                `json:"accountId"`
+	BucketID                    string                `json:"bucketId"`
+	BucketName                  string                `json:"bucketName"`
+	BucketType                  string                `json:"bucketType"`
+	BucketInfo                  map[string]string     `json:"bucketInfo"`
+	CORSRules                   []CORSRule            `json:"corsRules"`
+	LifecycleRules              []LifecycleRule       `json:"lifecycleRules"`
+	DefaultServerSideEncryption *ProtectedSSE         `json:"defaultServerSideEncryption,omitempty"`
+	FileLockConfiguration       *ProtectedFileLock    `json:"fileLockConfiguration,omitempty"`
+	ReplicationConfiguration    *ProtectedReplication `json:"replicationConfiguration,omitempty"`
+	Revision                    Revision              `json:"revision"`
+	Options                     []string              `json:"options,omitempty"`
 }
 
 // CreateBucketRequest is the body of b2_create_bucket. AccountID is filled in
@@ -159,16 +202,17 @@ type CreateBucketRequest struct {
 // unchanged by B2. Slices are pointers so that "replace with an empty list"
 // can be distinguished from "leave unchanged".
 type UpdateBucketRequest struct {
-	AccountID                   string                `json:"accountId"`
-	BucketID                    string                `json:"bucketId"`
-	BucketType                  string                `json:"bucketType,omitempty"`
-	BucketInfo                  *map[string]string    `json:"bucketInfo,omitempty"`
-	CORSRules                   *[]CORSRule           `json:"corsRules,omitempty"`
-	LifecycleRules              *[]LifecycleRule      `json:"lifecycleRules,omitempty"`
-	FileLockEnabled             *bool                 `json:"fileLockEnabled,omitempty"`
-	DefaultRetention            *DefaultRetention     `json:"defaultRetention,omitempty"`
-	DefaultServerSideEncryption *ServerSideEncryption `json:"defaultServerSideEncryption,omitempty"`
-	IfRevisionIs                Revision              `json:"ifRevisionIs,omitempty"`
+	AccountID                   string                    `json:"accountId"`
+	BucketID                    string                    `json:"bucketId"`
+	BucketType                  string                    `json:"bucketType,omitempty"`
+	BucketInfo                  *map[string]string        `json:"bucketInfo,omitempty"`
+	CORSRules                   *[]CORSRule               `json:"corsRules,omitempty"`
+	LifecycleRules              *[]LifecycleRule          `json:"lifecycleRules,omitempty"`
+	FileLockEnabled             *bool                     `json:"fileLockEnabled,omitempty"`
+	DefaultRetention            *DefaultRetention         `json:"defaultRetention,omitempty"`
+	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
+	ReplicationConfiguration    *ReplicationConfiguration `json:"replicationConfiguration,omitempty"`
+	IfRevisionIs                Revision                  `json:"ifRevisionIs,omitempty"`
 }
 
 // ListBucketsRequest is the body of b2_list_buckets. Set at most one of
@@ -230,3 +274,49 @@ type listKeysResponse struct {
 
 // Ptr returns a pointer to v. Convenience for optional wire fields.
 func Ptr[T any](v T) *T { return &v }
+
+// Partner API regions accepted by b2_create_group_member.
+var PartnerRegions = []string{"us-east", "us-west", "ca-east", "eu-central"}
+
+// GroupMember is a B2 account in a Partner API Group.
+type GroupMember struct {
+	AccountID  string `json:"accountId"`
+	Email      string `json:"email"`
+	GroupID    string `json:"groupId"`
+	GroupName  string `json:"groupName"`
+	Region     string `json:"region"`
+	S3Endpoint string `json:"s3Endpoint"`
+}
+
+// CreateGroupMemberResponse holds the new account and the only copy B2 will
+// ever return of its application key.
+type CreateGroupMemberResponse struct {
+	ApplicationKeyID string      `json:"applicationKeyId"`
+	ApplicationKey   string      `json:"applicationKey"`
+	GroupMember      GroupMember `json:"groupMember"`
+}
+
+type createGroupMemberRequest struct {
+	AdminAccountID string `json:"adminAccountId"`
+	GroupID        string `json:"groupId"`
+	MemberEmail    string `json:"memberEmail"`
+	Region         string `json:"region,omitempty"`
+}
+
+type listGroupMembersRequest struct {
+	AdminAccountID string `json:"adminAccountId"`
+	GroupID        string `json:"groupId"`
+	StartEmail     string `json:"startEmail,omitempty"`
+	MaxMemberCount int    `json:"maxMemberCount,omitempty"`
+}
+
+type listGroupMembersResponse struct {
+	GroupMembers []GroupMember `json:"groupMembers"`
+	NextEmail    *string       `json:"nextEmail"`
+}
+
+type ejectGroupMemberRequest struct {
+	AdminAccountID  string `json:"adminAccountId"`
+	GroupID         string `json:"groupId"`
+	MemberAccountID string `json:"memberAccountId"`
+}

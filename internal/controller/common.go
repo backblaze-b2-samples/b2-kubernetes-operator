@@ -54,8 +54,9 @@ const (
 	// KeyNamePrefix starts the name of every B2 key the operator creates.
 	KeyNamePrefix = "b2op"
 
-	indexBucketRef      = ".spec.bucketRef.name"
-	indexProviderConfig = ".spec.providerConfigRef.name"
+	indexBucketRef       = ".spec.bucketRef.name"
+	indexReplicationDest = ".spec.replication.destinationBucketRef.name"
+	indexProviderConfig  = ".spec.providerConfigRef.name"
 )
 
 // Options holds settings shared by the reconcilers.

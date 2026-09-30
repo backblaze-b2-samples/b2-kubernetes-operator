@@ -71,13 +71,29 @@ type Fault struct {
 type key struct {
 	b2.ApplicationKey
 	secret string
+	master bool
 }
 
 type bucket struct {
 	b2.Bucket
-	sse      *b2.ServerSideEncryption
-	fileLock b2.FileLockValue
-	hasFiles bool
+	sse         *b2.ServerSideEncryption
+	fileLock    b2.FileLockValue
+	replication b2.ReplicationConfiguration
+	hasFiles    bool
+}
+
+type account struct {
+	id     string
+	email  string
+	region string
+	s3URL  string
+}
+
+type group struct {
+	id      string
+	name    string
+	admin   string // account ID
+	members []string
 }
 
 // Server is a fake B2 API server.
@@ -95,6 +111,8 @@ type Server struct {
 
 	mu            sync.Mutex
 	now           func() time.Time
+	accounts      map[string]*account
+	groups        map[string]*group
 	keys          map[string]*key   // by applicationKeyId
 	tokens        map[string]string // token -> applicationKeyId
 	buckets       map[string]*bucket
@@ -121,6 +139,8 @@ func newServer() *Server {
 		AccountID:     "fakeaccount01",
 		S3APIURL:      "https://s3.us-west-004.backblazeb2.com",
 		now:           time.Now,
+		accounts:      map[string]*account{},
+		groups:        map[string]*group{},
 		keys:          map[string]*key{},
 		tokens:        map[string]string{},
 		buckets:       map[string]*bucket{},
@@ -130,26 +150,71 @@ func newServer() *Server {
 	}
 	s.MasterKeyID = s.AccountID
 	s.MasterKey = randHex(20)
-	s.keys[s.MasterKeyID] = &key{
-		ApplicationKey: b2.ApplicationKey{
-			AccountID: s.AccountID, ApplicationKeyID: s.MasterKeyID, KeyName: "master",
-			Capabilities: AllCapabilities,
-		},
-		secret: s.MasterKey,
-	}
+	s.addAccountLocked(s.AccountID, "admin@example.com", "us-west", s.S3APIURL, s.MasterKeyID, s.MasterKey)
 	return s
 }
 
-// SetMasterKey replaces the master key; the key ID is also the account ID.
+func (s *Server) addAccountLocked(id, email, region, s3URL, keyID, secret string) {
+	s.accounts[id] = &account{id: id, email: email, region: region, s3URL: s3URL}
+	s.keys[keyID] = &key{
+		ApplicationKey: b2.ApplicationKey{AccountID: id, ApplicationKeyID: keyID, KeyName: "master", Capabilities: AllCapabilities},
+		secret:         secret,
+		master:         true,
+	}
+}
+
+// SetMasterKey replaces the primary account; the key ID is also the account ID.
 func (s *Server) SetMasterKey(id, secret string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.keys, s.MasterKeyID)
+	delete(s.accounts, s.AccountID)
 	s.AccountID, s.MasterKeyID, s.MasterKey = id, id, secret
-	s.keys[id] = &key{
-		ApplicationKey: b2.ApplicationKey{AccountID: id, ApplicationKeyID: id, KeyName: "master", Capabilities: AllCapabilities},
-		secret:         secret,
+	s.addAccountLocked(id, "admin@example.com", "us-west", s.S3APIURL, id, secret)
+}
+
+// AddGroup creates a Partner API Group administered by the primary account
+// and returns its ID.
+func (s *Server) AddGroup(name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := s.newID("grp")
+	s.groups[id] = &group{id: id, name: name, admin: s.AccountID}
+	return id
+}
+
+// GroupMembers returns the account IDs in a Group.
+func (s *Server) GroupMembers(groupID string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if g, ok := s.groups[groupID]; ok {
+		return slices.Clone(g.members)
 	}
+	return nil
+}
+
+// AccountByEmail returns the ID of the account with the given email, or "".
+func (s *Server) AccountByEmail(email string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.accounts {
+		if strings.EqualFold(a.email, email) {
+			return a.id
+		}
+	}
+	return ""
+}
+
+// AccountOfBucket returns the account that owns the named bucket, or "".
+func (s *Server) AccountOfBucket(name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, b := range s.buckets {
+		if b.BucketName == name {
+			return b.AccountID
+		}
+	}
+	return ""
 }
 
 // URL is the base URL to authorize against.
@@ -179,7 +244,7 @@ func (s *Server) SetNow(now func() time.Time) {
 func (s *Server) AddKey(name string, capabilities []string, bucketIDs []string, namePrefix string) (string, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := s.newKeyLocked(name, capabilities, bucketIDs, namePrefix, nil)
+	k := s.newKeyLocked(s.AccountID, name, capabilities, bucketIDs, namePrefix, nil)
 	return k.ApplicationKeyID, k.secret
 }
 
@@ -252,8 +317,8 @@ func (s *Server) Keys() []b2.ApplicationKey {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []b2.ApplicationKey
-	for id, k := range s.keys {
-		if id != s.MasterKeyID {
+	for _, k := range s.keys {
+		if !k.master {
 			out = append(out, k.ApplicationKey)
 		}
 	}
@@ -284,8 +349,11 @@ func (s *Server) MutateBucket(name string, fn func(*b2.Bucket)) {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	op, ok := strings.CutPrefix(r.URL.Path, "/b2api/v4/")
 	if !ok {
-		writeErr(w, Fault{Status: 404, Code: "not_found", Message: "unknown path " + r.URL.Path})
-		return
+		op, ok = strings.CutPrefix(r.URL.Path, "/b2api/v3/")
+		if !ok || !strings.Contains(op, "group") {
+			writeErr(w, Fault{Status: 404, Code: "not_found", Message: "unknown path " + r.URL.Path})
+			return
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -316,7 +384,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if acct, ok := body["accountId"]; ok && op != "b2_delete_key" {
 		var a string
 		_ = json.Unmarshal(acct, &a)
-		if a != s.AccountID {
+		if a != caller.AccountID {
 			writeErr(w, Fault{Status: 401, Code: "unauthorized", Message: "accountId does not match"})
 			return
 		}
@@ -332,6 +400,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"b2_create_key":    {"writeKeys", s.createKey},
 		"b2_delete_key":    {"deleteKeys", s.deleteKey},
 		"b2_list_keys":     {"listKeys", s.listKeys},
+
+		"b2_list_group_members":  {"listKeys", s.listGroupMembers},
+		"b2_create_group_member": {"writeKeys", s.createGroupMember},
+		"b2_eject_group_member":  {"writeKeys", s.ejectGroupMember},
 	}
 	h, ok := handlers[op]
 	if !ok {
@@ -363,6 +435,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	token := "4_" + randHex(24)
 	s.tokens[token] = id
+	acct := s.accounts[k.AccountID]
 	allowed := b2.Allowed{Capabilities: k.Capabilities, NamePrefix: k.NamePrefix}
 	for _, bid := range k.BucketIDs {
 		ab := b2.AllowedBucket{ID: bid}
@@ -371,12 +444,14 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		}
 		allowed.Buckets = append(allowed.Buckets, ab)
 	}
+	info := b2.APIInfo{StorageAPI: b2.StorageAPI{APIURL: s.url, DownloadURL: s.url, S3APIURL: acct.s3URL, Allowed: allowed}}
+	if k.master {
+		info.GroupsAPI = &b2.GroupsAPI{GroupsAPIURL: s.url, Capabilities: []string{"listGroups", "writeGroups"}}
+	}
 	writeJSON(w, b2.Authorization{
-		AccountID:          s.AccountID,
-		AuthorizationToken: token,
-		APIInfo: b2.APIInfo{StorageAPI: b2.StorageAPI{
-			APIURL: s.url, DownloadURL: s.url, S3APIURL: s.S3APIURL, Allowed: allowed,
-		}},
+		AccountID:                         k.AccountID,
+		AuthorizationToken:                token,
+		APIInfo:                           info,
 		ApplicationKeyExpirationTimestamp: k.ExpirationTimestamp,
 	})
 }
@@ -398,13 +473,16 @@ func (s *Server) expired(k *key) bool {
 	return k.ExpirationTimestamp != nil && s.now().UnixMilli() >= *k.ExpirationTimestamp
 }
 
-func (s *Server) listBuckets(_ *key, body map[string]json.RawMessage) (any, *Fault) {
+func (s *Server) listBuckets(caller *key, body map[string]json.RawMessage) (any, *Fault) {
 	var req b2.ListBucketsRequest
 	if f := decode(body, &req); f != nil {
 		return nil, f
 	}
 	var out []b2.Bucket
 	for _, b := range s.buckets {
+		if b.AccountID != caller.AccountID {
+			continue
+		}
 		if req.BucketID != "" && b.BucketID != req.BucketID {
 			continue
 		}
@@ -417,7 +495,7 @@ func (s *Server) listBuckets(_ *key, body map[string]json.RawMessage) (any, *Fau
 	return map[string]any{"buckets": emptyIfNil(out)}, nil
 }
 
-func (s *Server) createBucket(_ *key, body map[string]json.RawMessage) (any, *Fault) {
+func (s *Server) createBucket(caller *key, body map[string]json.RawMessage) (any, *Fault) {
 	var req b2.CreateBucketRequest
 	if f := decode(body, &req); f != nil {
 		return nil, f
@@ -450,7 +528,7 @@ func (s *Server) createBucket(_ *key, body map[string]json.RawMessage) (any, *Fa
 		return nil, f
 	}
 	b := &bucket{Bucket: b2.Bucket{
-		AccountID: s.AccountID, BucketID: s.newID("bkt"), BucketName: req.BucketName,
+		AccountID: caller.AccountID, BucketID: s.newID("bkt"), BucketName: req.BucketName,
 		BucketType: req.BucketType, BucketInfo: info, CORSRules: req.CORSRules,
 		LifecycleRules: req.LifecycleRules, Revision: 1, Options: []string{"s3"},
 	}}
@@ -462,13 +540,13 @@ func (s *Server) createBucket(_ *key, body map[string]json.RawMessage) (any, *Fa
 	return s.renderBucket(b), nil
 }
 
-func (s *Server) updateBucket(_ *key, body map[string]json.RawMessage) (any, *Fault) {
+func (s *Server) updateBucket(caller *key, body map[string]json.RawMessage) (any, *Fault) {
 	var req b2.UpdateBucketRequest
 	if f := decode(body, &req); f != nil {
 		return nil, f
 	}
 	b, ok := s.buckets[req.BucketID]
-	if !ok {
+	if !ok || b.AccountID != caller.AccountID {
 		return nil, &Fault{Status: 400, Code: b2.CodeBadBucketID, Message: "Invalid bucketId: " + req.BucketID}
 	}
 	if req.IfRevisionIs != 0 && int64(req.IfRevisionIs) != int64(b.Revision) {
@@ -532,12 +610,17 @@ func (s *Server) updateBucket(_ *key, body map[string]json.RawMessage) (any, *Fa
 			next.sse = req.DefaultServerSideEncryption
 		}
 	}
+	if rc := req.ReplicationConfiguration; rc != nil {
+		if f := s.applyReplication(caller, &next, rc); f != nil {
+			return nil, f
+		}
+	}
 	next.Revision++
 	*b = next
 	return s.renderBucket(b), nil
 }
 
-func (s *Server) deleteBucket(_ *key, body map[string]json.RawMessage) (any, *Fault) {
+func (s *Server) deleteBucket(caller *key, body map[string]json.RawMessage) (any, *Fault) {
 	var req struct {
 		BucketID string `json:"bucketId"`
 	}
@@ -545,7 +628,7 @@ func (s *Server) deleteBucket(_ *key, body map[string]json.RawMessage) (any, *Fa
 		return nil, f
 	}
 	b, ok := s.buckets[req.BucketID]
-	if !ok {
+	if !ok || b.AccountID != caller.AccountID {
 		return nil, &Fault{Status: 400, Code: b2.CodeBadBucketID, Message: "Invalid bucketId: " + req.BucketID}
 	}
 	if b.hasFiles {
@@ -578,7 +661,7 @@ func (s *Server) createKey(caller *key, body map[string]json.RawMessage) (any, *
 		return nil, badRequest("validDurationInSeconds out of range")
 	}
 	for _, id := range req.BucketIDs {
-		if _, ok := s.buckets[id]; !ok {
+		if b, ok := s.buckets[id]; !ok || b.AccountID != caller.AccountID {
 			return nil, &Fault{Status: 400, Code: b2.CodeBadBucketID, Message: "Invalid bucketId: " + id}
 		}
 	}
@@ -589,13 +672,13 @@ func (s *Server) createKey(caller *key, body map[string]json.RawMessage) (any, *
 	if req.ValidDurationInSeconds > 0 {
 		exp = b2.Ptr(s.now().Add(time.Duration(req.ValidDurationInSeconds) * time.Second).UnixMilli())
 	}
-	k := s.newKeyLocked(req.KeyName, req.Capabilities, req.BucketIDs, req.NamePrefix, exp)
+	k := s.newKeyLocked(caller.AccountID, req.KeyName, req.Capabilities, req.BucketIDs, req.NamePrefix, exp)
 	out := k.ApplicationKey
 	out.ApplicationKey = k.secret
 	return out, nil
 }
 
-func (s *Server) deleteKey(_ *key, body map[string]json.RawMessage) (any, *Fault) {
+func (s *Server) deleteKey(caller *key, body map[string]json.RawMessage) (any, *Fault) {
 	var req struct {
 		ApplicationKeyID string `json:"applicationKeyId"`
 	}
@@ -603,7 +686,7 @@ func (s *Server) deleteKey(_ *key, body map[string]json.RawMessage) (any, *Fault
 		return nil, f
 	}
 	k, ok := s.keys[req.ApplicationKeyID]
-	if !ok || req.ApplicationKeyID == s.MasterKeyID {
+	if !ok || k.master || k.AccountID != caller.AccountID {
 		return nil, badRequest("applicationKeyId is not valid: %s", req.ApplicationKeyID)
 	}
 	delete(s.keys, req.ApplicationKeyID)
@@ -615,7 +698,7 @@ func (s *Server) deleteKey(_ *key, body map[string]json.RawMessage) (any, *Fault
 	return k.ApplicationKey, nil
 }
 
-func (s *Server) listKeys(_ *key, body map[string]json.RawMessage) (any, *Fault) {
+func (s *Server) listKeys(caller *key, body map[string]json.RawMessage) (any, *Fault) {
 	var req struct {
 		MaxKeyCount           int    `json:"maxKeyCount"`
 		StartApplicationKeyID string `json:"startApplicationKeyId"`
@@ -628,8 +711,8 @@ func (s *Server) listKeys(_ *key, body map[string]json.RawMessage) (any, *Fault)
 	}
 	req.MaxKeyCount = min(req.MaxKeyCount, 1000)
 	var ids []string
-	for id := range s.keys {
-		if id != s.MasterKeyID && id >= req.StartApplicationKeyID {
+	for id, k := range s.keys {
+		if !k.master && k.AccountID == caller.AccountID && id >= req.StartApplicationKeyID {
 			ids = append(ids, id)
 		}
 	}
@@ -647,10 +730,10 @@ func (s *Server) listKeys(_ *key, body map[string]json.RawMessage) (any, *Fault)
 	return resp, nil
 }
 
-func (s *Server) newKeyLocked(name string, caps, bucketIDs []string, prefix string, exp *int64) *key {
+func (s *Server) newKeyLocked(accountID, name string, caps, bucketIDs []string, prefix string, exp *int64) *key {
 	k := &key{
 		ApplicationKey: b2.ApplicationKey{
-			AccountID: s.AccountID, ApplicationKeyID: s.newID("004key"), KeyName: name,
+			AccountID: accountID, ApplicationKeyID: s.newID("004key"), KeyName: name,
 			Capabilities: slices.Clone(caps), BucketIDs: slices.Clone(bucketIDs),
 			ExpirationTimestamp: exp, Options: []string{"s3"},
 		},
@@ -683,6 +766,8 @@ func (s *Server) renderBucket(b *bucket) b2.Bucket {
 		fl.DefaultRetention = &b2.DefaultRetention{}
 	}
 	out.FileLockConfiguration = &b2.ProtectedFileLock{IsClientAuthorizedToRead: true, Value: &fl}
+	rc := b.replication
+	out.ReplicationConfiguration = &b2.ProtectedReplication{IsClientAuthorizedToRead: true, Value: &rc}
 	return out
 }
 
@@ -798,4 +883,175 @@ func randB64(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func (s *Server) applyReplication(caller *key, b *bucket, rc *b2.ReplicationConfiguration) *Fault {
+	if src := rc.AsReplicationSource; src != nil {
+		if len(src.ReplicationRules) > 2 {
+			return badRequest("a bucket may have at most 2 replication rules")
+		}
+		if len(src.ReplicationRules) == 0 {
+			b.replication.AsReplicationSource = nil
+		} else {
+			if src.SourceApplicationKeyID == nil {
+				return badRequest("sourceApplicationKeyId is required with replication rules")
+			}
+			k, ok := s.keys[*src.SourceApplicationKeyID]
+			if !ok || k.AccountID != caller.AccountID {
+				return badRequest("invalid sourceApplicationKeyId")
+			}
+			for _, c := range []string{"readFiles", "readFileLegalHolds", "readFileRetentions"} {
+				if !slices.Contains(k.Capabilities, c) {
+					return badRequest("source key lacks %s", c)
+				}
+			}
+			for _, r := range src.ReplicationRules {
+				if _, ok := s.buckets[r.DestinationBucketID]; !ok {
+					return &Fault{Status: 400, Code: b2.CodeBadBucketID, Message: "invalid destinationBucketId"}
+				}
+				if r.ReplicationRuleName == "" || r.Priority < 1 {
+					return badRequest("invalid replication rule")
+				}
+			}
+			cp := *src
+			cp.ReplicationRules = slices.Clone(src.ReplicationRules)
+			b.replication.AsReplicationSource = &cp
+		}
+	}
+	if dst := rc.AsReplicationDestination; dst != nil {
+		for _, destKey := range dst.SourceToDestinationKeyMapping {
+			k, ok := s.keys[destKey]
+			if !ok || k.AccountID != caller.AccountID {
+				return badRequest("invalid destination key %s", destKey)
+			}
+			for _, c := range []string{"writeFiles", "writeFileLegalHolds", "writeFileRetentions"} {
+				if !slices.Contains(k.Capabilities, c) {
+					return badRequest("destination key lacks %s", c)
+				}
+			}
+		}
+		if len(dst.SourceToDestinationKeyMapping) == 0 {
+			b.replication.AsReplicationDestination = nil
+		} else {
+			b.replication.AsReplicationDestination = &b2.ReplicationDestination{SourceToDestinationKeyMapping: maps(dst.SourceToDestinationKeyMapping)}
+		}
+	}
+	return nil
+}
+
+var emailRE = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
+func (s *Server) adminGroup(caller *key, body map[string]json.RawMessage) (*group, *Fault) {
+	var req struct {
+		AdminAccountID string `json:"adminAccountId"`
+		GroupID        string `json:"groupId"`
+	}
+	if f := decode(body, &req); f != nil {
+		return nil, f
+	}
+	g, ok := s.groups[req.GroupID]
+	if !ok || !caller.master || req.AdminAccountID != caller.AccountID || g.admin != caller.AccountID {
+		return nil, &Fault{Status: 401, Code: "invalid_group_id", Message: "invalid group or not its admin"}
+	}
+	return g, nil
+}
+
+func (s *Server) member(g *group, id string) b2.GroupMember {
+	a := s.accounts[id]
+	return b2.GroupMember{AccountID: a.id, Email: a.email, GroupID: g.id, GroupName: g.name, Region: a.region,
+		S3Endpoint: strings.TrimPrefix(a.s3URL, "https://")}
+}
+
+func (s *Server) listGroupMembers(caller *key, body map[string]json.RawMessage) (any, *Fault) {
+	g, f := s.adminGroup(caller, body)
+	if f != nil {
+		return nil, f
+	}
+	var req struct {
+		StartEmail     string `json:"startEmail"`
+		MaxMemberCount int    `json:"maxMemberCount"`
+	}
+	if f := decode(body, &req); f != nil {
+		return nil, f
+	}
+	if req.MaxMemberCount <= 0 {
+		req.MaxMemberCount = 100
+	}
+	members := make([]b2.GroupMember, 0, len(g.members))
+	for _, id := range g.members {
+		members = append(members, s.member(g, id))
+	}
+	sort.Slice(members, func(i, j int) bool { return members[i].Email < members[j].Email })
+	start := 0
+	for i, m := range members {
+		if m.Email == req.StartEmail {
+			start = i
+			break
+		}
+	}
+	members = members[start:]
+	resp := map[string]any{"groupId": g.id, "groupName": g.name, "nextEmail": nil}
+	if len(members) > req.MaxMemberCount {
+		resp["nextEmail"] = members[req.MaxMemberCount].Email
+		members = members[:req.MaxMemberCount]
+	}
+	resp["groupMembers"] = members
+	return resp, nil
+}
+
+func (s *Server) createGroupMember(caller *key, body map[string]json.RawMessage) (any, *Fault) {
+	g, f := s.adminGroup(caller, body)
+	if f != nil {
+		return nil, f
+	}
+	var req struct {
+		MemberEmail string `json:"memberEmail"`
+		Region      string `json:"region"`
+	}
+	if f := decode(body, &req); f != nil {
+		return nil, f
+	}
+	if !emailRE.MatchString(req.MemberEmail) {
+		return nil, &Fault{Status: 401, Code: "invalid_email", Message: "invalid email"}
+	}
+	for _, a := range s.accounts {
+		if strings.EqualFold(a.email, req.MemberEmail) {
+			return nil, &Fault{Status: 401, Code: "invalid_email", Message: "email already in use"}
+		}
+	}
+	if req.Region == "" {
+		req.Region = "us-west"
+	}
+	if !slices.Contains(b2.PartnerRegions, req.Region) {
+		return nil, &Fault{Status: 401, Code: "invalid_region", Message: "invalid region"}
+	}
+	if len(g.members) >= 5000 {
+		return nil, &Fault{Status: 401, Code: "too_many_members", Message: "group is full"}
+	}
+	id := s.newID("acct")
+	keyID, secret := s.newID("005key"), "K005"+randB64(22)
+	regionCode := map[string]string{"us-east": "us-east-005", "us-west": "us-west-004", "ca-east": "ca-east-006", "eu-central": "eu-central-003"}[req.Region]
+	s.addAccountLocked(id, req.MemberEmail, req.Region, "https://s3."+regionCode+".backblazeb2.com", keyID, secret)
+	g.members = append(g.members, id)
+	return b2.CreateGroupMemberResponse{ApplicationKeyID: keyID, ApplicationKey: secret, GroupMember: s.member(g, id)}, nil
+}
+
+func (s *Server) ejectGroupMember(caller *key, body map[string]json.RawMessage) (any, *Fault) {
+	g, f := s.adminGroup(caller, body)
+	if f != nil {
+		return nil, f
+	}
+	var req struct {
+		MemberAccountID string `json:"memberAccountId"`
+	}
+	if f := decode(body, &req); f != nil {
+		return nil, f
+	}
+	i := slices.Index(g.members, req.MemberAccountID)
+	if i < 0 {
+		return nil, &Fault{Status: 401, Code: "invalid_member_account_id", Message: "not a member of the group"}
+	}
+	m := s.member(g, req.MemberAccountID)
+	g.members = slices.Delete(g.members, i, i+1)
+	return []b2.GroupMember{m}, nil
 }

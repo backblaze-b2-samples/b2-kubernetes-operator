@@ -53,11 +53,34 @@ type ClusterProviderConfigSpec struct {
 	// be able to grant to the keys it creates.
 	CredentialsSecretRef CredentialsSecretReference `json:"credentialsSecretRef"`
 
+	// Partner enables provisioning B2 accounts (B2Account) through the
+	// Backblaze Partner API. The credentials must be the master application
+	// key of the Group admin account.
+	// +optional
+	Partner *PartnerSettings `json:"partner,omitempty"`
+
 	// APIURL is the B2 authorization endpoint.
 	// +kubebuilder:default="https://api.backblazeb2.com"
 	// +kubebuilder:validation:Pattern=`^https?://[^\s/]+(:[0-9]+)?/?$`
 	// +optional
 	APIURL string `json:"apiURL,omitempty"`
+}
+
+// PartnerSettings configures Partner API account provisioning.
+type PartnerSettings struct {
+	// GroupID is the Group that new accounts join. It must be a managed
+	// Group with B2 enabled.
+	// +kubebuilder:validation:MinLength=1
+	GroupID string `json:"groupID"`
+
+	// MemberEmailTemplate generates each account's email address from
+	// {customer} and {region}, e.g. "{customer}-{region}@hosting-company.com".
+	// B2 requires a unique, well-formed address per account; it does not
+	// have to receive mail. Changing the template does not rename existing
+	// accounts.
+	// +kubebuilder:validation:XValidation:rule="self.contains('{customer}') && self.contains('{region}')",message="memberEmailTemplate must contain {customer} and {region}"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[^@ ]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}$')",message="memberEmailTemplate must be an email address with a domain"
+	MemberEmailTemplate string `json:"memberEmailTemplate"`
 }
 
 // ClusterProviderConfigStatus is the observed state of the account.

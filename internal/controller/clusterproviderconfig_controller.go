@@ -105,6 +105,12 @@ func (r *ClusterProviderConfigReconciler) reconcile(ctx context.Context, pc *b2v
 		pc.Status.KeyExpiresAt = &t
 	}
 
+	if pc.Spec.Partner != nil && !acct.PartnerAPI {
+		return result(waitFor(b2v1.ReasonPartnerAPINotEnabled, 10*time.Minute,
+			"account %s is not enabled for the Backblaze Partner API; it is enabled by Backblaze sales for committed-contract customers, and the credentials must be the Group admin's master application key",
+			acct.AccountID), setReady)
+	}
+
 	msg := fmt.Sprintf("Authorized to B2 account %s", acct.AccountID)
 	var missing []string
 	for _, c := range operatorCapabilities {

@@ -40,6 +40,10 @@ const (
 	ReasonProviderError         = "ProviderError"
 	ReasonInvalidSpec           = "InvalidSpec"
 	ReasonUnsupported           = "Unsupported"
+	ReasonAccountConflict       = "AccountConflict"
+	ReasonPartnerAPINotEnabled  = "PartnerAPINotEnabled"
+	ReasonCredentialsMissing    = "CredentialsMissing"
+	ReasonReplicationNotReady   = "ReplicationNotReady"
 )
 
 // ProviderConfigReference names the ClusterProviderConfig holding the B2

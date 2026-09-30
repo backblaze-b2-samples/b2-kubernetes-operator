@@ -247,6 +247,10 @@ func TestBucketDeletionWaitsForItsKeys(t *testing.T) {
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
 	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
 	keyID := key.Status.KeyID
+	// A key that was never issued does not block deletion.
+	denied := newKey(ns, "denied", "haskeys", "shareFiles")
+	g.Expect(k8s.Create(ctx, denied)).To(Succeed())
+	eventuallyReason(g, denied, keyConds(denied), b2v1.ReasonPolicyDenied)
 
 	g.Expect(k8s.Delete(ctx, bkt)).To(Succeed())
 	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonDeletionBlocked)
