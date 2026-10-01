@@ -351,9 +351,7 @@ func TestBucketNameIsImmutable(t *testing.T) {
 	ns := newNamespace(t, true)
 	bkt := newBucket(ns, "fixed", ns+"-fixed")
 	g.Expect(k8s.Create(ctx, bkt)).To(Succeed())
-	bkt.Spec.BucketName = ns + "-renamed"
-	err := k8s.Update(ctx, bkt)
-	g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "err = %v", err)
+	expectInvalidUpdate(g, bkt, func() { bkt.Spec.BucketName = ns + "-renamed" })
 }
 
 func TestBucketNameValidation(t *testing.T) {

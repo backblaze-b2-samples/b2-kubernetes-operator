@@ -29,6 +29,7 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -266,6 +267,18 @@ func touch(g *WithT, obj client.Object) {
 	a["b2-test/touched"] = time.Now().String()
 	obj.SetAnnotations(a)
 	g.Expect(k8s.Patch(context.Background(), obj, client.MergeFrom(base))).To(Succeed())
+}
+
+// expectInvalidUpdate applies mutate to a fresh copy of obj and expects the
+// API server to reject the update as invalid. It retries on conflicts, since
+// the operator may be updating the object (e.g. adding its finalizer).
+func expectInvalidUpdate(g *WithT, obj client.Object, mutate func()) {
+	g.Eventually(func(g Gomega) {
+		g.Expect(k8s.Get(context.Background(), client.ObjectKeyFromObject(obj), obj)).To(Succeed())
+		mutate()
+		err := k8s.Update(context.Background(), obj)
+		g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "err = %v", err)
+	}, timeout, poll).Should(Succeed())
 }
 
 func must(err error) {

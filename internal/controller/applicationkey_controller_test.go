@@ -318,9 +318,7 @@ func TestKeyValidationRules(t *testing.T) {
 	ok := newKey(ns, "named", "b", "readFiles")
 	ok.Spec.SecretName = "first"
 	g.Expect(k8s.Create(ctx, ok)).To(Succeed())
-	ok.Spec.SecretName = "second"
-	err := k8s.Update(ctx, ok)
-	g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "secretName change: err = %v", err)
+	expectInvalidUpdate(g, ok, func() { ok.Spec.SecretName = "second" })
 }
 
 func TestKeyPolicyGapIsTolerated(t *testing.T) {
