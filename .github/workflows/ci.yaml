@@ -89,7 +89,7 @@ jobs:
           context: .
           load: true
           tags: b2-kubernetes-operator:scan
-      - uses: aquasecurity/trivy-action@0.33.1
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: b2-kubernetes-operator:scan
           severity: CRITICAL,HIGH

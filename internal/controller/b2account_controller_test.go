@@ -135,9 +135,12 @@ func TestB2AccountEjectKeepsCredentials(t *testing.T) {
 
 	g.Expect(k8s.Delete(ctx, acct)).To(Succeed())
 	g.Eventually(func() []string { return fakeB2.GroupMembers(groupID) }, timeout, poll).ShouldNot(ContainElement(id))
-	s := getSecret(g, operatorNS, "b2-account-"+c1002+"-us")
-	g.Expect(s.Annotations).To(HaveKey(annotationEjectedAt))
-	g.Expect(s.Data[b2v1.AccountSecretKey]).NotTo(BeEmpty(), "ejecting must not discard the stored key")
+	// The Secret is annotated just after the eject call returns.
+	g.Eventually(func(g Gomega) {
+		s := getSecret(g, operatorNS, "b2-account-"+c1002+"-us")
+		g.Expect(s.Annotations).To(HaveKey(annotationEjectedAt))
+		g.Expect(s.Data[b2v1.AccountSecretKey]).NotTo(BeEmpty(), "ejecting must not discard the stored key")
+	}, timeout, poll).Should(Succeed())
 }
 
 func TestB2AccountSameCustomerAndRegionConflicts(t *testing.T) {
