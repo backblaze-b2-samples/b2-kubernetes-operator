@@ -1,6 +1,7 @@
 version: "2"
 run:
   timeout: 5m
+  build-tags: [e2e, live]
 linters:
   default: none
   enable:

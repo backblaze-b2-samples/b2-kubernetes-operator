@@ -77,3 +77,4 @@ Reconciler handling of errors that persist: throttling is requeued after `Retry-
 | Unit | B2 client against the fake; policy evaluation | `go test ./internal/b2/... ./internal/policy/...` |
 | Integration | All controllers in a real API server (envtest) against the fake over HTTP, with fault injection | `make test` |
 | End to end | Release image and Helm chart in kind, with the fake B2 deployed in-cluster | `make test-e2e` |
+| Live | All controllers in envtest against the real B2 API, verified by reading B2 directly (opt-in, needs credentials) | `make test-live` |

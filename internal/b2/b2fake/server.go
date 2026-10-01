@@ -170,10 +170,17 @@ func (s *Server) SetMasterKey(id, secret string) {
 // and returns its ID.
 func (s *Server) AddGroup(name string) string {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	id := s.newID("grp")
-	s.groups[id] = &group{id: id, name: name, admin: s.AccountID}
+	s.mu.Unlock()
+	s.AddGroupWithID(id, name)
 	return id
+}
+
+// AddGroupWithID creates a Partner API Group with a given ID.
+func (s *Server) AddGroupWithID(id, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groups[id] = &group{id: id, name: name, admin: s.AccountID}
 }
 
 // GroupMembers returns the account IDs in a Group.

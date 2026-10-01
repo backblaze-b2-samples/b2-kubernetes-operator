@@ -32,11 +32,15 @@ func main() {
 	advertise := flag.String("advertise-url", "http://b2fake:8080", "URL returned to clients as apiUrl.")
 	keyID := flag.String("master-key-id", "e2eaccount01", "Master application key ID (also the account ID).")
 	key := flag.String("master-key", "e2e-master-key", "Master application key.")
+	groupID := flag.String("group-id", "", "If set, create a Partner API Group with this ID administered by the master account.")
 	flag.Parse()
 
 	s := b2fake.NewUnstarted()
 	s.SetMasterKey(*keyID, *key)
 	s.SetURL(*advertise)
+	if *groupID != "" {
+		s.AddGroupWithID(*groupID, "fake partner group")
+	}
 	srv := &http.Server{Addr: *addr, Handler: s, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("fake B2 listening on %s (advertising %s)", *addr, *advertise)
 	log.Fatal(srv.ListenAndServe())

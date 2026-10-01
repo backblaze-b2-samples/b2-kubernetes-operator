@@ -145,6 +145,7 @@ Operator flags (Helm values under `operator.*`):
 make test        # unit + envtest integration tests against an in-memory fake B2
 make lint
 make test-e2e    # builds images, installs the chart into kind, runs end-to-end tests
+make test-live   # runs the controllers against the real B2 API (opt-in, see test/live/README.md)
 make run         # run against your current kubeconfig
 ```
 
