@@ -147,6 +147,9 @@ func (r *B2AccountReconciler) reconcile(ctx context.Context, acct *b2v1.B2Accoun
 		}
 	}
 
+	if se := r.ensureOperationsKey(ctx, acct, partner); se != nil {
+		return result(se, setReady)
+	}
 	if se := r.ensureProviderConfig(ctx, acct, partner); se != nil {
 		return result(se, setReady)
 	}
@@ -176,7 +179,7 @@ func (r *B2AccountReconciler) resolvePartner(ctx context.Context, acct *b2v1.B2A
 	if pc.Spec.Partner == nil {
 		return nil, nil, waitFor(b2v1.ReasonInvalidSpec, 10*time.Minute, "ClusterProviderConfig %q has no spec.partner settings", name)
 	}
-	admin, se := r.resolveAccount(ctx, name)
+	admin, se := r.resolvePartnerAccount(ctx, name)
 	if se != nil {
 		return nil, nil, se
 	}
@@ -327,19 +330,82 @@ func (r *B2AccountReconciler) writeCredentials(ctx context.Context, acct *b2v1.B
 	s.Labels[LabelManagedBy] = ManagedByValue
 	s.Labels[labelAccount] = acct.Name
 	s.Annotations[annotationAccountUID] = string(acct.UID)
-	s.Data = map[string][]byte{
-		b2v1.AccountSecretKeyID:      []byte(keyID),
-		b2v1.AccountSecretKey:        []byte(appKey),
-		b2v1.AccountSecretAccountID:  []byte(m.AccountID),
-		b2v1.AccountSecretEmail:      []byte(m.Email),
-		b2v1.AccountSecretRegion:     []byte(m.Region),
-		b2v1.AccountSecretS3Endpoint: []byte(m.S3Endpoint),
-		b2v1.AccountSecretGroupID:    []byte(groupID),
+	if s.Data == nil {
+		s.Data = map[string][]byte{}
+	}
+	for k, v := range map[string]string{
+		b2v1.AccountSecretKeyID:      keyID,
+		b2v1.AccountSecretKey:        appKey,
+		b2v1.AccountSecretAccountID:  m.AccountID,
+		b2v1.AccountSecretEmail:      m.Email,
+		b2v1.AccountSecretRegion:     m.Region,
+		b2v1.AccountSecretS3Endpoint: m.S3Endpoint,
+		b2v1.AccountSecretGroupID:    groupID,
+	} {
+		s.Data[k] = []byte(v)
 	}
 	if exists {
 		return r.Client.Update(ctx, s, client.FieldOwner(FieldOwner))
 	}
 	return r.Client.Create(ctx, s, client.FieldOwner(FieldOwner))
+}
+
+// ensureOperationsKey makes sure the account has an application key for the
+// operator's own bucket and key management, created with the master key and
+// stored next to it. The master key is only used here, and for the Partner
+// API through the Group admin's config.
+func (r *B2AccountReconciler) ensureOperationsKey(ctx context.Context, acct *b2v1.B2Account, partner *b2v1.ClusterProviderConfig) *stageError {
+	key := client.ObjectKey{Namespace: acct.Spec.CredentialsSecretRef.Namespace, Name: acct.SecretNameOrDefault()}
+	var s corev1.Secret
+	if err := r.APIReader.Get(ctx, key, &s); err != nil {
+		return &stageError{reason: b2v1.ReasonReconciling, message: fmt.Sprintf("reading Secret %s: %v", key, err), err: err}
+	}
+	masterID, master := string(s.Data[b2v1.AccountSecretKeyID]), string(s.Data[b2v1.AccountSecretKey])
+	if masterID == "" || master == "" {
+		return waitFor(b2v1.ReasonCredentialsMissing, 10*time.Minute, "Secret %s holds no master key for account %s", key, acct.Status.AccountID)
+	}
+	mc := b2.New(b2.Options{BaseURL: partner.Spec.APIURL, ApplicationKeyID: masterID, ApplicationKey: master, UserAgent: r.Registry.UserAgent})
+
+	opsID := string(s.Data[b2v1.AccountSecretOperationsKeyID])
+	if opsID != "" && len(s.Data[b2v1.AccountSecretOperationsKey]) > 0 {
+		ok, err := mc.KeyExists(ctx, opsID)
+		if err != nil {
+			return providerError("checking the operations key", err)
+		}
+		if ok {
+			acct.Status.OperationsKeyID = opsID
+			return nil
+		}
+		r.Recorder.Eventf(acct, nil, corev1.EventTypeWarning, "OperationsKeyMissing", "Reconcile", "Operations key %s no longer exists in B2; creating a new one", opsID)
+	}
+
+	// A key under our name whose secret half was never stored is useless.
+	name := fmt.Sprintf("%s-%s-%s-ops", KeyNamePrefix, r.Options.ClusterID, uid8(acct.UID))
+	stale, err := mc.FindKeys(ctx, func(k b2.ApplicationKey) bool { return k.KeyName == name })
+	if err != nil {
+		return providerError("listing keys", err)
+	}
+	for _, k := range stale {
+		if err := deleteKeyIfExists(ctx, mc, k.ApplicationKeyID); err != nil {
+			return providerError("revoking a stale operations key", err)
+		}
+	}
+
+	k, err := mc.CreateKey(ctx, b2.CreateKeyRequest{KeyName: name, Capabilities: b2.AllCapabilities})
+	if err != nil {
+		return providerError("creating the operations key", err)
+	}
+	base := s.DeepCopy()
+	s.Data[b2v1.AccountSecretOperationsKeyID] = []byte(k.ApplicationKeyID)
+	s.Data[b2v1.AccountSecretOperationsKey] = []byte(k.ApplicationKey)
+	if err := r.Client.Patch(ctx, &s, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}), client.FieldOwner(FieldOwner)); err != nil {
+		_ = deleteKeyIfExists(ctx, mc, k.ApplicationKeyID)
+		return &stageError{reason: b2v1.ReasonReconciling, message: "storing the operations key: " + err.Error(), err: err}
+	}
+	acct.Status.OperationsKeyID = k.ApplicationKeyID
+	r.Recorder.Eventf(acct, nil, corev1.EventTypeNormal, "OperationsKeyCreated", "CreateKey",
+		"Created application key %s for managing the account; the master key is stored but not used for bucket management", k.ApplicationKeyID)
+	return nil
 }
 
 func (r *B2AccountReconciler) recordMember(acct *b2v1.B2Account, m *b2.GroupMember, email string, secretKey client.ObjectKey) {
@@ -363,11 +429,13 @@ func (r *B2AccountReconciler) ensureProviderConfig(ctx context.Context, acct *b2
 	}
 	want := b2v1.ClusterProviderConfigSpec{
 		APIURL: partner.Spec.APIURL,
+		// Day-to-day management uses the operations application key,
+		// never the account's master key.
 		CredentialsSecretRef: b2v1.CredentialsSecretReference{
 			Namespace:           acct.Spec.CredentialsSecretRef.Namespace,
 			Name:                acct.SecretNameOrDefault(),
-			ApplicationKeyIDKey: b2v1.AccountSecretKeyID,
-			ApplicationKeyKey:   b2v1.AccountSecretKey,
+			ApplicationKeyIDKey: b2v1.AccountSecretOperationsKeyID,
+			ApplicationKeyKey:   b2v1.AccountSecretOperationsKey,
 		},
 	}
 	switch {
@@ -456,6 +524,7 @@ func (r *B2AccountReconciler) finalize(ctx context.Context, acct *b2v1.B2Account
 			se.message = "cannot eject: " + se.message + " (remove the finalizer to leave the account in the Group)"
 			return fail(se)
 		}
+		r.revokeOperationsKey(ctx, acct, admin)
 		err := admin.Client.EjectGroupMember(ctx, acct.Status.GroupID, acct.Status.AccountID)
 		if err != nil && !b2.HasCode(err, "invalid_member_account_id") {
 			return fail(partnerError("ejecting account", err))
@@ -477,6 +546,30 @@ func (r *B2AccountReconciler) finalize(ctx context.Context, acct *b2v1.B2Account
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	return ctrl.Result{}, nil
+}
+
+// revokeOperationsKey removes the operator's own key from an account it is
+// handing off. The stored master key is kept.
+func (r *B2AccountReconciler) revokeOperationsKey(ctx context.Context, acct *b2v1.B2Account, admin *provider.Account) {
+	var s corev1.Secret
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: acct.Spec.CredentialsSecretRef.Namespace, Name: acct.SecretNameOrDefault()}, &s); err != nil {
+		return
+	}
+	opsID := string(s.Data[b2v1.AccountSecretOperationsKeyID])
+	if opsID == "" {
+		return
+	}
+	mc := b2.New(b2.Options{BaseURL: admin.APIURL, ApplicationKeyID: string(s.Data[b2v1.AccountSecretKeyID]), ApplicationKey: string(s.Data[b2v1.AccountSecretKey])})
+	if err := deleteKeyIfExists(ctx, mc, opsID); err != nil {
+		log.FromContext(ctx).Error(err, "revoking operations key before eject", "keyID", opsID)
+		return
+	}
+	base := s.DeepCopy()
+	delete(s.Data, b2v1.AccountSecretOperationsKeyID)
+	delete(s.Data, b2v1.AccountSecretOperationsKey)
+	if err := r.Client.Patch(ctx, &s, client.MergeFrom(base)); err != nil {
+		log.FromContext(ctx).Error(err, "removing operations key from Secret")
+	}
 }
 
 func (r *B2AccountReconciler) annotateSecret(ctx context.Context, acct *b2v1.B2Account, key, value string) {

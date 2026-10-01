@@ -53,6 +53,9 @@ type Account struct {
 	Capabilities []string
 	// PartnerAPI reports whether the account may use the Partner (Groups) API.
 	PartnerAPI bool
+	// MasterKey reports whether the credentials are the account's master
+	// application key rather than a (restrictable) application key.
+	MasterKey bool
 	// KeyExpirationMillis is the operator key's expiry, if any.
 	KeyExpirationMillis *int64
 }
@@ -129,6 +132,7 @@ func (r *Registry) Refresh(ctx context.Context, pc *b2v1.ClusterProviderConfig) 
 		Capabilities:        auth.APIInfo.StorageAPI.Allowed.Capabilities,
 		KeyExpirationMillis: auth.ApplicationKeyExpirationTimestamp,
 		PartnerAPI:          auth.APIInfo.GroupsAPI != nil,
+		MasterKey:           b2.IsMasterKey(keyID, auth.AccountID),
 	}
 
 	r.mu.Lock()

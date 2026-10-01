@@ -272,6 +272,20 @@ type listKeysResponse struct {
 	NextApplicationKeyID *string          `json:"nextApplicationKeyId"`
 }
 
+// AllCapabilities is every application key capability (what a master key holds).
+var AllCapabilities = []string{
+	"listKeys", "writeKeys", "deleteKeys", "listAllBucketNames", "listBuckets", "readBuckets",
+	"writeBuckets", "deleteBuckets", "readBucketRetentions", "writeBucketRetentions",
+	"readBucketEncryption", "writeBucketEncryption", "readBucketNotifications",
+	"writeBucketNotifications", "listFiles", "readFiles", "shareFiles", "writeFiles", "deleteFiles",
+	"readFileLegalHolds", "writeFileLegalHolds", "readFileRetentions", "writeFileRetentions",
+	"bypassGovernance", "readBucketLogging", "writeBucketLogging",
+}
+
+// IsMasterKey reports whether keyID is the account's master application key,
+// whose ID is the account ID.
+func IsMasterKey(keyID, accountID string) bool { return keyID != "" && keyID == accountID }
+
 // Ptr returns a pointer to v. Convenience for optional wire fields.
 func Ptr[T any](v T) *T { return &v }
 

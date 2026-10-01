@@ -27,7 +27,7 @@ The operator creates the key in B2, restricted to one bucket and prefix. It deli
 ## Features
 
 - **Buckets:** type, bucket info, lifecycle rules, CORS rules, SSE-B2 encryption (on by default), Object Lock with default retention, and Cloud Replication across accounts and regions.
-- **Customer accounts:** one B2 account per customer per region through the [Partner API](docs/partner.md). The key B2 returns once is stored and never discarded, and a provider config and access policy are published for each account.
+- **Customer accounts:** one B2 account per customer per region through the [Partner API](docs/partner.md). The key B2 returns once is stored and never discarded. The operator manages each account through its own application key, and publishes a provider config and access policy for it.
 - **Application keys:** restricted to a bucket, a file-name prefix and a set of capabilities, with optional expiry. Delivered to a Secret with S3-compatible variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, `AWS_REGION`).
 - **Zero-downtime rotation:** the operator creates the new key, then updates the Secret, and revokes the old key only after a grace period. Rotation can run on a schedule, before expiry, or after a spec change, a lost Secret, or a key revoked outside Kubernetes.
 - **Multi-tenant guardrails:** a cluster-scoped `B2AccessPolicy` controls, per namespace, which bucket names, capabilities, key lifetimes and bucket settings are allowed. It is enforced by the operator before every B2 call, not only at admission.
@@ -109,6 +109,8 @@ Read [docs/security.md](docs/security.md) before running this on a shared cluste
 - **Namespace admins and editors can manage Buckets and ApplicationKeys** through aggregated roles. `B2AccessPolicy` and `ClusterProviderConfig` are for cluster admins only.
 
 ### Operator key
+
+Use a **restricted application key**, not the account's master key: it can be scoped, rotated and revoked on its own. The master key is only needed for the Partner API (see below). `kubectl get clusterproviderconfigs` shows each config's key type, and a master key used for bucket management is flagged with a `MasterKeyInUse` warning.
 
 The operator's key needs `listBuckets`, `readBuckets`, `writeBuckets`, `deleteBuckets`, `listKeys`, `writeKeys` and `deleteKeys`. It also needs `read/writeBucketEncryption` and `read/writeBucketRetentions` for encryption and Object Lock, Give it every capability it will grant to tenant keys, too. The provider config's `Ready` condition message warns if core capabilities are missing.
 

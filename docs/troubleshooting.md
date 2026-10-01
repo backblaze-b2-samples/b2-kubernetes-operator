@@ -15,7 +15,11 @@ Start with `kubectl describe` on the resource. The `Ready` condition's reason an
 | `BucketNotReady` | ApplicationKey | The referenced `Bucket` is missing or not `Ready` yet. The key proceeds automatically when it is. |
 | `BucketNotFound` | ApplicationKey | `spec.bucketName` names a bucket that does not exist in the account. |
 | `SecretConflict` | ApplicationKey | A Secret with the target name exists and is not owned by this key. The operator will not overwrite it. Delete it or set `spec.secretName`. |
-| `InvalidSpec` | ApplicationKey | For example, the key and its Bucket use different provider configs. |
+| `InvalidSpec` | Bucket, ApplicationKey | For example, the resource references a Partner API config (use the B2Account's config), or a key and its Bucket use different provider configs. |
+| `PartnerRequiresMasterKey` | ClusterProviderConfig | `spec.partner` is set but the credentials are an application key. The Partner API needs the Group admin account's master key, whose key ID equals the account ID. |
+| `PartnerAPINotEnabled` | ClusterProviderConfig | The master key works, but the account is not a Partner API Group admin. Backblaze sales enables the Partner API for committed-contract customers. |
+| `AccountConflict` | B2Account | Another B2Account already uses this customer and region (email), or provider config name. Alternatively, the credentials Secret holds a key the operator did not write, or B2 refused the email. |
+| `CredentialsMissing` | B2Account | A Group member with this email exists, but no key for it is stored. Store its key in the Secret and set `adoptExisting`. |
 | `ProviderError` | any | B2 returned an error. The message includes the B2 error code. Transient errors are retried with backoff. |
 
 ## Common questions

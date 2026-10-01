@@ -159,14 +159,28 @@ func providerError(action string, err error) *stageError {
 	return se
 }
 
-// resolveAccount returns the B2 account for a provider config name.
+// resolveAccount returns the B2 account for a provider config name, for
+// bucket and key management. Partner configs are refused.
 func (d *Deps) resolveAccount(ctx context.Context, name string) (*provider.Account, *stageError) {
+	return d.resolve(ctx, name, false)
+}
+
+// resolvePartnerAccount returns the Group admin account of a partner config.
+func (d *Deps) resolvePartnerAccount(ctx context.Context, name string) (*provider.Account, *stageError) {
+	return d.resolve(ctx, name, true)
+}
+
+func (d *Deps) resolve(ctx context.Context, name string, partner bool) (*provider.Account, *stageError) {
 	var pc b2v1.ClusterProviderConfig
 	if err := d.Client.Get(ctx, client.ObjectKey{Name: name}, &pc); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, waitFor(b2v1.ReasonProviderNotReady, time.Minute, "ClusterProviderConfig %q not found", name)
 		}
 		return nil, &stageError{reason: b2v1.ReasonProviderNotReady, message: err.Error(), err: err}
+	}
+	if pc.Spec.Partner != nil && !partner {
+		return nil, waitFor(b2v1.ReasonInvalidSpec, 10*time.Minute,
+			"ClusterProviderConfig %q is a Partner API config holding the Group admin's master key; it only provisions B2Accounts. Use the provider config of a B2Account (or another account) instead", name)
 	}
 	if !meta.IsStatusConditionTrue(pc.Status.Conditions, b2v1.ConditionReady) {
 		msg := "not ready"

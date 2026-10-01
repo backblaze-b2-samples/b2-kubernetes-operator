@@ -42,6 +42,7 @@ const (
 	ReasonUnsupported           = "Unsupported"
 	ReasonAccountConflict       = "AccountConflict"
 	ReasonPartnerAPINotEnabled  = "PartnerAPINotEnabled"
+	ReasonPartnerNeedsMasterKey = "PartnerRequiresMasterKey"
 	ReasonCredentialsMissing    = "CredentialsMissing"
 	ReasonReplicationNotReady   = "ReplicationNotReady"
 )

@@ -42,14 +42,7 @@ import (
 )
 
 // AllCapabilities is every capability a master key holds.
-var AllCapabilities = []string{
-	"listKeys", "writeKeys", "deleteKeys", "listAllBucketNames", "listBuckets", "readBuckets",
-	"writeBuckets", "deleteBuckets", "readBucketRetentions", "writeBucketRetentions",
-	"readBucketEncryption", "writeBucketEncryption", "readBucketNotifications",
-	"writeBucketNotifications", "listFiles", "readFiles", "shareFiles", "writeFiles", "deleteFiles",
-	"readFileLegalHolds", "writeFileLegalHolds", "readFileRetentions", "writeFileRetentions",
-	"bypassGovernance", "readBucketLogging", "writeBucketLogging",
-}
+var AllCapabilities = b2.AllCapabilities
 
 var (
 	bucketNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{4,61}[A-Za-z0-9]$`)
@@ -445,7 +438,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		allowed.Buckets = append(allowed.Buckets, ab)
 	}
 	info := b2.APIInfo{StorageAPI: b2.StorageAPI{APIURL: s.url, DownloadURL: s.url, S3APIURL: acct.s3URL, Allowed: allowed}}
-	if k.master {
+	if k.master && s.adminsGroup(k.AccountID) {
 		info.GroupsAPI = &b2.GroupsAPI{GroupsAPIURL: s.url, Capabilities: []string{"listGroups", "writeGroups"}}
 	}
 	writeJSON(w, b2.Authorization{
@@ -885,6 +878,15 @@ func randB64(n int) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+func (s *Server) adminsGroup(accountID string) bool {
+	for _, g := range s.groups {
+		if g.admin == accountID {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) applyReplication(caller *key, b *bucket, rc *b2.ReplicationConfiguration) *Fault {
 	if src := rc.AsReplicationSource; src != nil {
 		if len(src.ReplicationRules) > 2 {
@@ -1028,8 +1030,10 @@ func (s *Server) createGroupMember(caller *key, body map[string]json.RawMessage)
 	if len(g.members) >= 5000 {
 		return nil, &Fault{Status: 401, Code: "too_many_members", Message: "group is full"}
 	}
+	// Modelled as the new account's master key (key ID == account ID). The
+	// operator does not rely on this: it only needs writeKeys on the key.
 	id := s.newID("acct")
-	keyID, secret := s.newID("005key"), "K005"+randB64(22)
+	keyID, secret := id, "K005"+randB64(22)
 	regionCode := map[string]string{"us-east": "us-east-005", "us-west": "us-west-004", "ca-east": "ca-east-006", "eu-central": "eu-central-003"}[req.Region]
 	s.addAccountLocked(id, req.MemberEmail, req.Region, "https://s3."+regionCode+".backblazeb2.com", keyID, secret)
 	g.members = append(g.members, id)

@@ -25,6 +25,9 @@ spec:
     - jsonPath: .status.s3Region
       name: Region
       type: string
+    - jsonPath: .status.keyType
+      name: Key
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -69,8 +72,9 @@ spec:
                 type: string
               credentialsSecretRef:
                 description: |-
-                  CredentialsSecretRef points at the application key the operator uses
-                  for this account. It needs listBuckets, readBuckets, writeBuckets and
+                  CredentialsSecretRef points at the key the operator uses for this
+                  account. Use an application key, not the master key, unless spec.partner
+                  is set: the Partner API requires the Group admin's master key. It needs listBuckets, readBuckets, writeBuckets and
                   deleteBuckets to manage buckets; listKeys, writeKeys and deleteKeys to
                   manage keys; read/writeBucketEncryption and read/writeBucketRetentions
                   for encryption and Object Lock settings; and every capability it must
@@ -208,6 +212,12 @@ spec:
                 description: KeyExpiresAt is when the operator's application key expires,
                   if ever.
                 format: date-time
+                type: string
+              keyType:
+                description: |-
+                  KeyType is Master when the credentials are the account's master
+                  application key, otherwise Application. Partner configs need the
+                  master key; everything else should use an application key.
                 type: string
               lastAuthorizedTime:
                 description: LastAuthorizedTime is when the credentials were last

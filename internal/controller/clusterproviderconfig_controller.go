@@ -26,6 +26,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -105,6 +106,15 @@ func (r *ClusterProviderConfigReconciler) reconcile(ctx context.Context, pc *b2v
 		pc.Status.KeyExpiresAt = &t
 	}
 
+	pc.Status.KeyType = b2v1.KeyTypeApplication
+	if acct.MasterKey {
+		pc.Status.KeyType = b2v1.KeyTypeMaster
+	}
+	if pc.Spec.Partner != nil && !acct.MasterKey {
+		return result(waitFor(b2v1.ReasonPartnerNeedsMasterKey, 10*time.Minute,
+			"the Partner API requires the Group admin account's master application key (its key ID equals the account ID %s); these credentials are an application key",
+			acct.AccountID), setReady)
+	}
 	if pc.Spec.Partner != nil && !acct.PartnerAPI {
 		return result(waitFor(b2v1.ReasonPartnerAPINotEnabled, 10*time.Minute,
 			"account %s is not enabled for the Backblaze Partner API; it is enabled by Backblaze sales for committed-contract customers, and the credentials must be the Group admin's master application key",
@@ -120,6 +130,13 @@ func (r *ClusterProviderConfigReconciler) reconcile(ctx context.Context, pc *b2v
 	}
 	if len(missing) > 0 {
 		msg += fmt.Sprintf("; the key lacks %s, so some operations will fail", strings.Join(missing, ", "))
+	}
+	if pc.Spec.Partner == nil && acct.MasterKey {
+		msg += "; this is the account's master key, use a restricted application key instead"
+		if prev := meta.FindStatusCondition(pc.Status.Conditions, b2v1.ConditionReady); prev == nil || prev.Message != msg {
+			r.Recorder.Eventf(pc, nil, corev1.EventTypeWarning, "MasterKeyInUse", "Authorize",
+				"Bucket and key management is using the account's master key; create an application key with the capabilities the operator needs and use it instead")
+		}
 	}
 	setCondition(&pc.Status.Conditions, pc.Generation, metav1.ConditionTrue, b2v1.ReasonReconciled, msg)
 	return ctrl.Result{RequeueAfter: r.Options.ResyncPeriod}, nil

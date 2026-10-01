@@ -87,11 +87,22 @@ func TestB2AccountProvisionsAccountAndStoresKey(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(auth.AccountID).To(Equal(acct.Status.AccountID))
 
+	// Management uses an application key created in the account; the
+	// master key B2 returned is stored but not used for it.
+	g.Expect(acct.Status.OperationsKeyID).NotTo(BeEmpty())
+	g.Expect(string(s.Data[b2v1.AccountSecretOperationsKeyID])).To(Equal(acct.Status.OperationsKeyID))
+	opsKey := fakeB2.Key(acct.Status.OperationsKeyID)
+	g.Expect(opsKey).NotTo(BeNil())
+	g.Expect(opsKey.AccountID).To(Equal(acct.Status.AccountID))
+	g.Expect(string(s.Data[b2v1.AccountSecretKeyID])).NotTo(Equal(acct.Status.OperationsKeyID), "the operations key is separate from the key B2 returned")
+
 	// A provider config and access policy are published for the account.
 	pc := &b2v1.ClusterProviderConfig{ObjectMeta: metav1.ObjectMeta{Name: c1001 + "-eu"}}
 	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonReconciled)
 	g.Expect(pc.Status.AccountID).To(Equal(acct.Status.AccountID))
 	g.Expect(pc.Status.S3Region).To(Equal("eu-central-003"))
+	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeApplication))
+	g.Expect(pc.Spec.CredentialsSecretRef.ApplicationKeyIDKey).To(Equal(b2v1.AccountSecretOperationsKeyID))
 	var policy b2v1.B2AccessPolicy
 	g.Expect(k8s.Get(ctx, client.ObjectKey{Name: "b2account-" + c1001 + "-eu"}, &policy)).To(Succeed())
 	g.Expect(policy.Spec.ProviderConfigs).To(ConsistOf(c1001 + "-eu"))
@@ -131,7 +142,7 @@ func TestB2AccountEjectKeepsCredentials(t *testing.T) {
 	acct.Spec.DeletionPolicy = b2v1.AccountDeletionPolicyEject
 	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
 	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonReconciled)
-	id := acct.Status.AccountID
+	id, opsID := acct.Status.AccountID, acct.Status.OperationsKeyID
 
 	g.Expect(k8s.Delete(ctx, acct)).To(Succeed())
 	g.Eventually(func() []string { return fakeB2.GroupMembers(groupID) }, timeout, poll).ShouldNot(ContainElement(id))
@@ -140,7 +151,9 @@ func TestB2AccountEjectKeepsCredentials(t *testing.T) {
 		s := getSecret(g, operatorNS, "b2-account-"+c1002+"-us")
 		g.Expect(s.Annotations).To(HaveKey(annotationEjectedAt))
 		g.Expect(s.Data[b2v1.AccountSecretKey]).NotTo(BeEmpty(), "ejecting must not discard the stored key")
+		g.Expect(s.Data).NotTo(HaveKey(b2v1.AccountSecretOperationsKeyID), "the operator's own key is removed on eject")
 	}, timeout, poll).Should(Succeed())
+	g.Expect(fakeB2.Key(opsID)).To(BeNil(), "the operations key is revoked on eject")
 }
 
 func TestB2AccountSameCustomerAndRegionConflicts(t *testing.T) {
@@ -201,27 +214,64 @@ func TestB2AccountAdoptsExistingMember(t *testing.T) {
 	g.Expect(acct.Status.AccountID).To(Equal(created.GroupMember.AccountID))
 }
 
-func TestPartnerAPINotEnabled(t *testing.T) {
+func TestPartnerConfigRequiresMasterKey(t *testing.T) {
 	g := requireEnv(t)
 	ctx := context.Background()
-	name := uniqueCustomer("not-partner-")
-	// Only master keys of Group admins get the Groups API in the fake.
-	id, secret := fakeB2.AddKey("not-partner", []string{"listBuckets", "writeKeys"}, nil, "")
+	name := uniqueCustomer("app-key-partner-")
+	id, secret := fakeB2.AddKey("not-master", []string{"listBuckets", "writeKeys"}, nil, "")
 	g.Expect(k8s.Create(ctx, &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: operatorNS, Name: name},
 		StringData: map[string]string{"applicationKeyId": id, "applicationKey": secret},
 	})).To(Succeed())
-	pc := &b2v1.ClusterProviderConfig{
+	pc := partnerConfigFor(name, name)
+	g.Expect(k8s.Create(ctx, pc)).To(Succeed())
+	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonPartnerNeedsMasterKey)
+	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeApplication))
+}
+
+func TestPartnerAPINotEnabled(t *testing.T) {
+	g := requireEnv(t)
+	ctx := context.Background()
+	c := uniqueCustomer("cust3003")
+	// A customer account's master key: a master key, but not a Group admin.
+	acct := newAccount(c, c, "us-west")
+	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
+	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonReconciled)
+	pc := partnerConfigFor(c+"-as-partner", "b2-account-"+c)
+	g.Expect(k8s.Create(ctx, pc)).To(Succeed())
+	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonPartnerAPINotEnabled)
+	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeMaster))
+	g.Expect(readyCondition(g, pc, func() []metav1.Condition { return pc.Status.Conditions }).Message).To(ContainSubstring("sales"))
+}
+
+func TestMasterKeyForBucketManagementIsFlagged(t *testing.T) {
+	g := requireEnv(t)
+	pc := &b2v1.ClusterProviderConfig{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
+	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonReconciled)
+	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeMaster))
+	g.Expect(readyCondition(g, pc, func() []metav1.Condition { return pc.Status.Conditions }).Message).To(ContainSubstring("use a restricted application key"))
+}
+
+func TestBucketCannotUsePartnerConfig(t *testing.T) {
+	g := requireEnv(t)
+	ns := newNamespace(t, true)
+	bkt := newBucket(ns, "via-partner", ns+"-via-partner")
+	bkt.Spec.ProviderConfigRef.Name = partnerConfig
+	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
+	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonInvalidSpec)
+	g.Expect(readyCondition(g, bkt, bucketConds(bkt)).Message).To(ContainSubstring("Partner API config"))
+	g.Expect(fakeB2.Bucket(ns + "-via-partner")).To(BeNil())
+}
+
+func partnerConfigFor(name, secret string) *b2v1.ClusterProviderConfig {
+	return &b2v1.ClusterProviderConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: b2v1.ClusterProviderConfigSpec{
 			APIURL:               fakeB2.URL(),
-			CredentialsSecretRef: b2v1.CredentialsSecretReference{Namespace: operatorNS, Name: name},
+			CredentialsSecretRef: b2v1.CredentialsSecretReference{Namespace: operatorNS, Name: secret},
 			Partner:              &b2v1.PartnerSettings{GroupID: groupID, MemberEmailTemplate: "{customer}-{region}@hosting.example.com"},
 		},
 	}
-	g.Expect(k8s.Create(ctx, pc)).To(Succeed())
-	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonPartnerAPINotEnabled)
-	g.Expect(readyCondition(g, pc, func() []metav1.Condition { return pc.Status.Conditions }).Message).To(ContainSubstring("sales"))
 }
 
 func TestPartnerEmailTemplateValidation(t *testing.T) {

@@ -6,7 +6,7 @@ Hosting providers and resellers can give each customer their own B2 account, one
 
 - **Partner API access.** Backblaze sales enables the Partner API for committed-contract customers. A `ClusterProviderConfig` with `spec.partner` whose account is not enabled reports `PartnerAPINotEnabled`.
 - **A Group** with B2 enabled, managed by your admin account. See [Create a Group for the Partner API](https://www.backblaze.com/docs/cloud-storage-create-a-group-for-the-partner-api).
-- **The Group admin's master application key**, stored in a Secret in the operator's namespace.
+- **The Group admin's master application key**, stored in a Secret in the operator's namespace. The Partner API requires the master key; a partner config holding an application key reports `PartnerRequiresMasterKey`. A partner config is used only to create and eject accounts: Buckets and ApplicationKeys cannot reference it.
 
 ## How it fits together
 
@@ -16,7 +16,7 @@ ClusterProviderConfig "partner"         Group admin credentials + email template
         ▼
 B2Account "customer-a-west"              one per customer per region
         │  b2_create_group_member
-        ├─► Secret b2-account-customer-a-west   the new account's key (never deleted by the operator)
+        ├─► Secret b2-account-customer-a-west   the key B2 returned (kept, unused) + the operator's application key
         ├─► ClusterProviderConfig "customer-a-west"
         └─► B2AccessPolicy "b2account-customer-a-west"  (from spec.access)
                 │
@@ -43,6 +43,7 @@ spec:
 
 - **Email.** B2 requires a unique email address per account, but never mails it. The operator generates it from the partner's `memberEmailTemplate`, for example `{customer}-{region}@hosting-company.com` gives `customer-a-us-west@hosting-company.com`. The address is fixed at creation and recorded in `status.email`. A second `B2Account` for the same customer and region is refused with `AccountConflict`.
 - **Credentials.** `b2_create_group_member` returns the account's application key exactly once. The operator writes it to the credentials Secret before doing anything else. If that write fails, the key is held in memory and the write is retried until it succeeds; the key is never logged or put in status. The operator never overwrites a Secret that already holds a key it did not write, and never deletes a credentials Secret, whatever the deletion policy.
+- **Master key vs. application key.** The key B2 returns for a new account is stored as is, under `applicationKeyId`/`applicationKey`. The operator then uses it once to create its own application key in the account, stored next to it as `operationsKeyId`/`operationsKey`. The account's provider config uses that application key for all bucket and key management, so the account's master key never serves day-to-day traffic. If the operations key is deleted in B2, a new one is created. On eject it is revoked; the stored master key is kept.
 - **Existing accounts.** If a Group member with the generated email already exists, the resource reports `CredentialsMissing` until its key is stored in the Secret and `spec.adoptExisting: true` is set. The operator checks that the key belongs to that account before using it.
 - **Customer key hygiene.** Workloads should get scoped `ApplicationKey`s, not the account key. The account key stays in the operator's namespace.
 

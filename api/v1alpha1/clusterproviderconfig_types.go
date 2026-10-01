@@ -45,8 +45,9 @@ type CredentialsSecretReference struct {
 
 // ClusterProviderConfigSpec configures access to one B2 account.
 type ClusterProviderConfigSpec struct {
-	// CredentialsSecretRef points at the application key the operator uses
-	// for this account. It needs listBuckets, readBuckets, writeBuckets and
+	// CredentialsSecretRef points at the key the operator uses for this
+	// account. Use an application key, not the master key, unless spec.partner
+	// is set: the Partner API requires the Group admin's master key. It needs listBuckets, readBuckets, writeBuckets and
 	// deleteBuckets to manage buckets; listKeys, writeKeys and deleteKeys to
 	// manage keys; read/writeBucketEncryption and read/writeBucketRetentions
 	// for encryption and Object Lock settings; and every capability it must
@@ -83,6 +84,14 @@ type PartnerSettings struct {
 	MemberEmailTemplate string `json:"memberEmailTemplate"`
 }
 
+// KeyType distinguishes master from application keys.
+type KeyType string
+
+const (
+	KeyTypeMaster      KeyType = "Master"
+	KeyTypeApplication KeyType = "Application"
+)
+
 // ClusterProviderConfigStatus is the observed state of the account.
 type ClusterProviderConfigStatus struct {
 	// ObservedGeneration is the generation last reconciled.
@@ -100,6 +109,12 @@ type ClusterProviderConfigStatus struct {
 	// S3Region is the region component of the S3 endpoint.
 	// +optional
 	S3Region string `json:"s3Region,omitempty"`
+
+	// KeyType is Master when the credentials are the account's master
+	// application key, otherwise Application. Partner configs need the
+	// master key; everything else should use an application key.
+	// +optional
+	KeyType KeyType `json:"keyType,omitempty"`
 
 	// Capabilities held by the operator's application key.
 	// +listType=set
@@ -126,6 +141,7 @@ type ClusterProviderConfigStatus struct {
 // +kubebuilder:resource:scope=Cluster,shortName=b2pc,categories=b2
 // +kubebuilder:printcolumn:name="Account",type=string,JSONPath=`.status.accountID`
 // +kubebuilder:printcolumn:name="Region",type=string,JSONPath=`.status.s3Region`
+// +kubebuilder:printcolumn:name="Key",type=string,JSONPath=`.status.keyType`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

@@ -389,6 +389,11 @@ spec:
               observedGeneration:
                 format: int64
                 type: integer
+              operationsKeyID:
+                description: |-
+                  OperationsKeyID is the application key the operator created in the
+                  account for day-to-day management; the master key is kept but unused.
+                type: string
               providerConfigName:
                 description: ProviderConfigName is the ClusterProviderConfig created
                   for the account.
