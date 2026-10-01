@@ -32,6 +32,9 @@ This document describes what the operator protects against, how, and what remain
 | Admission is bypassed or webhooks are down | There are no webhooks to bypass. Policy is evaluated in the controller before every B2 mutation; CRD schema and CEL rules handle static validation. |
 | A console or CLI change weakens a bucket | Drift (bucket type, info, lifecycle, CORS, and managed encryption / Object Lock settings) is reverted within `--resync-period` and recorded as a `DriftCorrected` warning event. |
 | The master key is overused | The Partner API master key lives only in the partner config, which Buckets and ApplicationKeys cannot reference. Customer accounts are managed through an operator-created application key, not their master key. Provider configs report their key type, and warn when a master key is used for bucket management. |
+| A tenant delivers credentials to a cluster or namespace it should not reach | `deliverTo` must match `keys.allowedDeliveryTargets` in a policy, and only cluster administrators can create `RemoteCluster`s. |
+| A malicious kubeconfig makes the operator run code or leak its own token | Kubeconfigs with exec or auth-provider plugins, or with token, certificate or CA file paths, are rejected. Credentials must be inline. |
+| The operator overwrites a customer's Secret in their cluster | Remote Secrets carry `b2.backblaze.com/owner-uid`; a same-named Secret without it is reported as `SecretConflict` and never touched. |
 | API traffic is intercepted | Only `https://` API URLs are accepted unless `--allow-insecure-api-url` is set, which is for tests. |
 
 ## Cluster admin responsibilities

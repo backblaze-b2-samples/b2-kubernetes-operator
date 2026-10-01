@@ -20,6 +20,7 @@ Start with `kubectl describe` on the resource. The `Ready` condition's reason an
 | `PartnerAPINotEnabled` | ClusterProviderConfig | The master key works, but the account is not a Partner API Group admin. Backblaze sales enables the Partner API for committed-contract customers. |
 | `AccountConflict` | B2Account | Another B2Account already uses this customer and region (email), or provider config name. Alternatively, the credentials Secret holds a key the operator did not write, or B2 refused the email. |
 | `CredentialsMissing` | B2Account | A Group member with this email exists, but no key for it is stored. Store its key in the Secret and set `adoptExisting`. |
+| `RemoteClusterNotReady` | ApplicationKey, RemoteCluster | The `RemoteCluster` named in `deliverTo` is missing or unreachable. Check `kubectl describe remotecluster`. No key is created until its Secret can be delivered. |
 | `ProviderError` | any | B2 returned an error. The message includes the B2 error code. Transient errors are retried with backoff. |
 
 ## Common questions

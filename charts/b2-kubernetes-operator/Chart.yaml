@@ -1,6 +1,6 @@
 apiVersion: v2
 name: b2-kubernetes-operator
-description: Kubernetes operator for Backblaze B2 Cloud Storage buckets and scoped application keys.
+description: Kubernetes operator for Backblaze B2 Cloud Storage buckets and scoped application keys (open-source sample, not officially supported by Backblaze).
 type: application
 version: 0.1.0
 appVersion: "v0.1.0"

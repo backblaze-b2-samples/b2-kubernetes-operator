@@ -152,6 +152,33 @@ spec:
                       type: string
                     type: array
                     x-kubernetes-list-type: set
+                  allowedDeliveryTargets:
+                    description: |-
+                      AllowedDeliveryTargets lists the remote clusters and namespaces that
+                      keys may be delivered to with spec.deliverTo. Empty allows none.
+                    items:
+                      description: DeliveryTargetPattern allows delivery to matching
+                        remote namespaces.
+                      properties:
+                        namespaces:
+                          description: |-
+                            Namespaces are glob patterns for the remote namespace. {namespace} is
+                            replaced with the requesting namespace, e.g. "{namespace}" or
+                            "storage". Empty allows none.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: set
+                        remoteCluster:
+                          description: RemoteCluster name, or a glob pattern; "*"
+                            allows any.
+                          minLength: 1
+                          type: string
+                      required:
+                      - remoteCluster
+                      type: object
+                    maxItems: 64
+                    type: array
                   maxValidity:
                     description: |-
                       MaxValidity, if set, requires every key to set spec.validFor no longer

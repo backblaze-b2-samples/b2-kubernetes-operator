@@ -56,6 +56,7 @@ const (
 
 	indexBucketRef       = ".spec.bucketRef.name"
 	indexReplicationDest = ".spec.replication.destinationBucketRef.name"
+	indexRemoteCluster   = ".spec.deliverTo.remoteCluster"
 	indexProviderConfig  = ".spec.providerConfigRef.name"
 )
 

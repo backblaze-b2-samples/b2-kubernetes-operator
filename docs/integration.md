@@ -51,11 +51,29 @@ Deleting a whole namespace is safe: finalizers run in dependency order (keys, th
 
 ## Where the operator runs
 
-The operator manages Kubernetes resources in the cluster it runs in, and writes Secrets to that cluster. There are two ways to fit it into a platform where each customer has their own cluster:
+Both of the usual layouts work. Choose per customer, or mix them.
 
-| Topology | How it works | Trade-offs |
+| Layout | Set up | Secrets land in |
 | --- | --- | --- |
-| **Central** (one operator in the provider's management cluster) | The platform creates `B2Account`, `Bucket` and `ApplicationKey` objects in per-customer namespaces of the management cluster. Credentials are then delivered into each customer cluster, either by the platform or with a secrets sync tool (External Secrets Operator `PushSecret`, or a similar tool). | Partner admin credentials live in one place. Delivering Secrets into customer clusters is a separate step. |
-| **Per customer cluster** (an operator in each customer cluster) | Each customer cluster gets a `ClusterProviderConfig` for that customer's account only, and Secrets land in the customer's own cluster directly. Accounts are still created centrally (a central operator with the partner config, or the platform). | No cross-cluster delivery. The customer's account key sits in the customer's cluster, and there are more operator installs to run. |
+| **In each customer cluster** | Install the operator in the customer cluster with a `ClusterProviderConfig` for that customer's account only. | The customer cluster, in the namespace of each `ApplicationKey` (default). |
+| **Central** (one operator in your management cluster) | Create B2Accounts, Buckets and ApplicationKeys in per-customer namespaces of the management cluster. Register each customer cluster as a `RemoteCluster`, and set `deliverTo` on ApplicationKeys. | The customer cluster, in the namespace named by `deliverTo`. |
 
-The Partner admin key should never be installed in customer clusters. Native delivery of Secrets into remote clusters (a central operator writing directly into customer clusters) is on the [roadmap](roadmap.md). The right choice depends on who operates the customer clusters and how credentials reach them today.
+With the central layout, the Partner API admin key and customer account keys never leave the management cluster. Customer clusters only receive the scoped keys their workloads use.
+
+### Central layout: delivering to customer clusters
+
+1. In the customer cluster, create a ServiceAccount that can only `get`, `create`, `update` and `delete` Secrets in the target namespace.
+2. Store a kubeconfig for that ServiceAccount, with the token and CA embedded, in a Secret in the operator's namespace.
+3. Register it as a `RemoteCluster`. `kubectl get remoteclusters` shows whether the operator can connect, and the cluster's Kubernetes version.
+4. Allow the customer's namespace to deliver there, with `keys.allowedDeliveryTargets` in its B2AccessPolicy (or in the B2Account's `spec.access.keys`).
+5. Set `deliverTo: {remoteCluster, namespace}` on ApplicationKeys. `status.deliveredTo` shows where each Secret is.
+
+See [config/samples/08-remote-cluster.yaml](../config/samples/08-remote-cluster.yaml) for the full set of manifests.
+
+Remote Secrets follow the same rules as local ones:
+- Ownership: the operator writes only Secrets it created, marked with `b2.backblaze.com/owner-uid`, and refuses to overwrite a customer's Secret of the same name (`SecretConflict`).
+- Rotation: rotation and revocation work as they do locally.
+- Deletion: deleting the ApplicationKey removes the remote Secret.
+- Drift: a remote Secret deleted by hand is replaced within `--resync-period`, since remote clusters are not watched.
+
+Kubeconfigs that run commands (`exec` or auth-provider plugins) or read local files (token, certificate or CA paths) are rejected. Otherwise, whoever writes the kubeconfig Secret could make the operator run a program, or send its own credentials to another server.

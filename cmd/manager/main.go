@@ -46,6 +46,7 @@ import (
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/controller"
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/policy"
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/provider"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/remote"
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/version"
 )
 
@@ -158,7 +159,12 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Bucket")
 		os.Exit(1)
 	}
-	if err := (&controller.ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+	remotes := &remote.Registry{APIReader: mgr.GetAPIReader()}
+	if err := (&controller.RemoteClusterReconciler{Deps: deps, Remote: remotes}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "RemoteCluster")
+		os.Exit(1)
+	}
+	if err := (&controller.ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader(), Remote: remotes}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ApplicationKey")
 		os.Exit(1)
 	}

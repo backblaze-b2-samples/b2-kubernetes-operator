@@ -43,6 +43,7 @@ func addKnownTypes(s *runtime.Scheme) error {
 		&Bucket{}, &BucketList{},
 		&ApplicationKey{}, &ApplicationKeyList{},
 		&B2Account{}, &B2AccountList{},
+		&RemoteCluster{}, &RemoteClusterList{},
 	)
 	metav1.AddToGroupVersion(s, GroupVersion)
 	return nil

@@ -281,3 +281,30 @@ func TestEvaluatorBlocksKeyManagementCapabilities(t *testing.T) {
 		t.Errorf("expected allow when the operator permits key management and the policy allows it, got %+v", d)
 	}
 }
+
+func TestEvaluateKeyDelivery(t *testing.T) {
+	p := policy("deliver", nil, func(s *b2v1.B2AccessPolicySpec) {
+		s.Keys.AllowedDeliveryTargets = []b2v1.DeliveryTargetPattern{{RemoteCluster: "cust-*", Namespaces: []string{"{namespace}", "storage"}}}
+	})
+	req := func(cluster, ns string) KeyRequest {
+		return KeyRequest{Namespace: "acme", ProviderConfig: "default", BucketName: "acme-acme-x", Capabilities: []b2v1.Capability{"readFiles"},
+			DeliverTo: &b2v1.DeliveryTarget{RemoteCluster: cluster, Namespace: ns}}
+	}
+	for _, c := range []struct {
+		cluster, ns string
+		allow       bool
+	}{
+		{"cust-acme", "acme", true},
+		{"cust-acme", "storage", true},
+		{"cust-acme", "kube-system", false},
+		{"other", "acme", false},
+	} {
+		d := EvaluateKey([]b2v1.B2AccessPolicy{p}, nil, req(c.cluster, c.ns))
+		if d.Allowed != c.allow {
+			t.Errorf("deliver to %s/%s: Allowed = %v (%s), want %v", c.cluster, c.ns, d.Allowed, d.Reason, c.allow)
+		}
+	}
+	if d := EvaluateKey([]b2v1.B2AccessPolicy{policy("none", nil, nil)}, nil, req("cust-acme", "acme")); d.Allowed {
+		t.Error("remote delivery must be denied unless a policy allows it")
+	}
+}

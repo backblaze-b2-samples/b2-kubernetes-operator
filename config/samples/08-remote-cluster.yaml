@@ -1,0 +1,61 @@
+# Cluster administrator, central operator: deliver key Secrets into a
+# customer's own cluster.
+#
+# 1. In the CUSTOMER cluster, give the operator an identity that can only
+#    manage Secrets in the namespaces it delivers to:
+#
+#    apiVersion: v1
+#    kind: ServiceAccount
+#    metadata: {name: b2-operator-delivery, namespace: storage}
+#    ---
+#    apiVersion: rbac.authorization.k8s.io/v1
+#    kind: Role
+#    metadata: {name: b2-operator-delivery, namespace: storage}
+#    rules:
+#      - apiGroups: [""]
+#        resources: [secrets]
+#        verbs: [get, create, update, delete]
+#    ---
+#    apiVersion: rbac.authorization.k8s.io/v1
+#    kind: RoleBinding
+#    metadata: {name: b2-operator-delivery, namespace: storage}
+#    roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: b2-operator-delivery}
+#    subjects: [{kind: ServiceAccount, name: b2-operator-delivery, namespace: storage}]
+#
+# 2. Create a kubeconfig for that ServiceAccount with the token and CA
+#    embedded (exec plugins and file paths are rejected), and store it in
+#    the OPERATOR's cluster:
+#
+#    kubectl -n b2-operator-system create secret generic customer-a-kubeconfig \
+#      --from-file=kubeconfig=./customer-a.kubeconfig
+apiVersion: b2.backblaze.com/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: customer-a
+spec:
+  kubeconfigSecretRef:
+    namespace: b2-operator-system
+    name: customer-a-kubeconfig
+---
+# 3. Allow the customer's namespace to deliver there. Add this to the
+#    customer's B2AccessPolicy (or B2Account spec.access.keys):
+#
+#    keys:
+#      allowedDeliveryTargets:
+#        - remoteCluster: customer-a
+#          namespaces: [storage]
+#
+# 4. Keys then set deliverTo; the Secret appears in storage/uploads-writer
+#    in the customer cluster.
+apiVersion: b2.backblaze.com/v1alpha1
+kind: ApplicationKey
+metadata:
+  name: uploads-writer
+  namespace: customer-a
+spec:
+  providerConfigRef: {name: customer-a-west}
+  bucketRef: {name: datasets}
+  capabilities: [listFiles, readFiles, writeFiles]
+  deliverTo:
+    remoteCluster: customer-a
+    namespace: storage

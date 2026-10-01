@@ -1,5 +1,7 @@
 # Security policy
 
+This project is an open-source sample, not an officially supported Backblaze product. Security reports are still very welcome.
+
 Please do not report security vulnerabilities through public GitHub issues.
 
 Report them privately through [GitHub security advisories](https://github.com/backblaze-b2-samples/b2-kubernetes-operator/security/advisories/new) for this repository.

@@ -47,6 +47,7 @@ import (
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2/b2fake"
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/policy"
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/provider"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/remote"
 )
 
 const (
@@ -69,8 +70,12 @@ var (
 	fakeB2  *b2fake.Server
 	sweeper *KeySweeper
 	groupID string
-	testCtx context.Context
-	skipMsg string
+	// remoteK8s is a second API server standing in for a customer cluster
+	// that keys are delivered to.
+	remoteK8s        client.Client
+	remoteKubeconfig []byte
+	testCtx          context.Context
+	skipMsg          string
 )
 
 func TestMain(m *testing.M) {
@@ -99,6 +104,17 @@ func runSuite(m *testing.M) int {
 		panic(err)
 	}
 	defer func() { _ = env.Stop() }()
+
+	remoteEnv := &envtest.Environment{}
+	remoteCfg, err := remoteEnv.Start()
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = remoteEnv.Stop() }()
+	remoteUser, err := remoteEnv.AddUser(envtest.User{Name: "b2-operator", Groups: []string{"system:masters"}}, nil)
+	must(err)
+	remoteKubeconfig, err = remoteUser.KubeConfig()
+	must(err)
 
 	scheme := runtime.NewScheme()
 	must(clientgoscheme.AddToScheme(scheme))
@@ -135,7 +151,9 @@ func runSuite(m *testing.M) int {
 	sweeper = &KeySweeper{Deps: deps, APIReader: mgr.GetAPIReader()}
 	must((&ClusterProviderConfigReconciler{Deps: deps}).SetupWithManager(mgr))
 	must((&BucketReconciler{Deps: deps}).SetupWithManager(mgr))
-	must((&ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
+	remotes := &remote.Registry{APIReader: mgr.GetAPIReader()}
+	must((&RemoteClusterReconciler{Deps: deps, Remote: remotes}).SetupWithManager(mgr))
+	must((&ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader(), Remote: remotes}).SetupWithManager(mgr))
 	must((&B2AccountReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
 
 	var cancel context.CancelFunc
@@ -148,6 +166,8 @@ func runSuite(m *testing.M) int {
 	}()
 
 	k8s, err = client.New(cfg, client.Options{Scheme: scheme})
+	must(err)
+	remoteK8s, err = client.New(remoteCfg, client.Options{Scheme: scheme})
 	must(err)
 	must(seedCluster())
 	return m.Run()
@@ -203,6 +223,9 @@ func seedCluster() error {
 				},
 				Keys: b2v1.KeyPolicy{
 					AllowedCapabilities: []b2v1.Capability{"listBuckets", "listFiles", "readFiles", "writeFiles", "deleteFiles", "writeKeys"},
+					AllowedDeliveryTargets: []b2v1.DeliveryTargetPattern{
+						{RemoteCluster: "customer-*", Namespaces: []string{"{namespace}"}},
+					},
 				},
 			},
 		},

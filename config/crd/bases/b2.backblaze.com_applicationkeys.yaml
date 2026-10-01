@@ -123,6 +123,28 @@ spec:
                 minItems: 1
                 type: array
                 x-kubernetes-list-type: set
+              deliverTo:
+                description: |-
+                  DeliverTo writes the Secret to a namespace in another cluster instead
+                  of this namespace. Must be allowed by keys.allowedDeliveryTargets in a
+                  B2AccessPolicy. Immutable.
+                properties:
+                  namespace:
+                    description: Namespace in the remote cluster.
+                    maxLength: 63
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  remoteCluster:
+                    description: RemoteCluster names the RemoteCluster to write the
+                      Secret to.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - namespace
+                - remoteCluster
+                type: object
               namePrefix:
                 description: NamePrefix restricts the key to files whose names start
                   with it.
@@ -201,6 +223,9 @@ spec:
             - message: secretName is immutable
               rule: has(self.secretName) == has(oldSelf.secretName) && (!has(self.secretName)
                 || self.secretName == oldSelf.secretName)
+            - message: deliverTo is immutable
+              rule: has(self.deliverTo) == has(oldSelf.deliverTo) && (!has(self.deliverTo)
+                || self.deliverTo == oldSelf.deliverTo)
           status:
             description: ApplicationKeyStatus is the observed state of an ApplicationKey.
             properties:
@@ -273,6 +298,11 @@ spec:
               createdAt:
                 description: CreatedAt is when the current key was created.
                 format: date-time
+                type: string
+              deliveredTo:
+                description: |-
+                  DeliveredTo is where the Secret is: "local", or
+                  "<remote cluster>/<namespace>".
                 type: string
               expiresAt:
                 description: ExpiresAt is when the current key expires, if ever.

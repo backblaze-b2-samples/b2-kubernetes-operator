@@ -53,6 +53,7 @@ rules:
   - b2accounts/status
   - buckets/status
   - clusterproviderconfigs/status
+  - remoteclusters/status
   verbs:
   - get
   - patch
@@ -69,6 +70,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - b2.backblaze.com
+  resources:
+  - remoteclusters
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - events.k8s.io

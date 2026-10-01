@@ -22,6 +22,8 @@ The operator creates the key in B2, restricted to one bucket and prefix. It deli
 - **Any Kubernetes team using B2.** Point the operator at your B2 account and manage buckets and scoped keys declaratively. Guardrails keep teams on a shared cluster within their own buckets. This is the [Quick start](#quick-start).
 - **Hosting providers, GPU clouds and resellers.** With the Backblaze [Partner API](docs/partner.md), the operator also creates a separate B2 account for each customer and region, which you can build self-service storage on. See [docs/integration.md](docs/integration.md). This layer is optional and needs Partner API access.
 
+> **Not an official Backblaze product.** This is an open-source sample, published under the Apache 2.0 license. It is not supported by Backblaze, and B2 support cannot help with it. Report problems and ask questions through [GitHub issues](https://github.com/backblaze-b2-samples/b2-kubernetes-operator/issues). Test it with your own workloads before relying on it.
+
 > **Status:** `v1alpha1`. The API may change before `v1`. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Features
@@ -34,6 +36,7 @@ The operator creates the key in B2, restricted to one bucket and prefix. It deli
 - **Safe ownership:** a bucket is managed only if this resource created it, or if adoption was requested *and* allowed by policy. Deleting a resource keeps the bucket by default (`deletionPolicy: Retain`).
 - **Drift correction:** live B2 state is compared with the spec on every change and every resync period. Changes made in the console or CLI are reverted and reported as events.
 - **Multiple accounts:** create one `ClusterProviderConfig` per B2 account.
+- **Central or per-cluster:** deliver key Secrets to the local namespace (default), or into other clusters registered as `RemoteCluster`s, so one operator can serve many customer clusters.
 - **Operable:** conditions and events on every resource, Prometheus metrics for B2 API calls, leader election, a restricted pod security context, and a distroless non-root image.
 
 ## Quick start
@@ -80,6 +83,7 @@ envFrom:
 | `Bucket` | Namespace | App team | A B2 bucket |
 | `ApplicationKey` | Namespace | App team | A scoped key, delivered to a Secret |
 | `B2Account` | Cluster | Platform | A customer account created through the Partner API |
+| `RemoteCluster` | Cluster | Platform | Another cluster that key Secrets can be delivered to |
 
 `kubectl explain bucket.spec` documents every field. More examples are in [config/samples](config/samples).
 

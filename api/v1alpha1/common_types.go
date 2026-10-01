@@ -45,6 +45,7 @@ const (
 	ReasonPartnerNeedsMasterKey = "PartnerRequiresMasterKey"
 	ReasonCredentialsMissing    = "CredentialsMissing"
 	ReasonReplicationNotReady   = "ReplicationNotReady"
+	ReasonRemoteClusterNotReady = "RemoteClusterNotReady"
 )
 
 // ProviderConfigReference names the ClusterProviderConfig holding the B2

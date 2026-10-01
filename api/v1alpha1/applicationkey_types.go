@@ -55,6 +55,20 @@ type KeyRotation struct {
 	GracePeriod *metav1.Duration `json:"gracePeriod,omitempty"`
 }
 
+// DeliveryTarget sends the key's Secret to another cluster.
+type DeliveryTarget struct {
+	// RemoteCluster names the RemoteCluster to write the Secret to.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	RemoteCluster string `json:"remoteCluster"`
+
+	// Namespace in the remote cluster.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Namespace string `json:"namespace"`
+}
+
 // SecretTemplate adds metadata to the generated Secret.
 type SecretTemplate struct {
 	// +optional
@@ -67,6 +81,7 @@ type SecretTemplate struct {
 // +kubebuilder:validation:XValidation:rule="!(has(self.bucketRef) && has(self.bucketName))",message="set at most one of bucketRef and bucketName"
 // +kubebuilder:validation:XValidation:rule="!has(self.namePrefix) || has(self.bucketRef) || has(self.bucketName)",message="namePrefix requires bucketRef or bucketName"
 // +kubebuilder:validation:XValidation:rule="has(self.secretName) == has(oldSelf.secretName) && (!has(self.secretName) || self.secretName == oldSelf.secretName)",message="secretName is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.deliverTo) == has(oldSelf.deliverTo) && (!has(self.deliverTo) || self.deliverTo == oldSelf.deliverTo)",message="deliverTo is immutable"
 type ApplicationKeySpec struct {
 	// ProviderConfigRef selects the B2 account.
 	// +kubebuilder:default={name: default}
@@ -118,6 +133,12 @@ type ApplicationKeySpec struct {
 	// SecretTemplate adds labels and annotations to the Secret.
 	// +optional
 	SecretTemplate *SecretTemplate `json:"secretTemplate,omitempty"`
+
+	// DeliverTo writes the Secret to a namespace in another cluster instead
+	// of this namespace. Must be allowed by keys.allowedDeliveryTargets in a
+	// B2AccessPolicy. Immutable.
+	// +optional
+	DeliverTo *DeliveryTarget `json:"deliverTo,omitempty"`
 }
 
 // RetiringKey is a replaced key awaiting revocation.
@@ -153,6 +174,11 @@ type ApplicationKeyStatus struct {
 	// SecretName holding the key.
 	// +optional
 	SecretName string `json:"secretName,omitempty"`
+
+	// DeliveredTo is where the Secret is: "local", or
+	// "<remote cluster>/<namespace>".
+	// +optional
+	DeliveredTo string `json:"deliveredTo,omitempty"`
 
 	// CreatedAt is when the current key was created.
 	// +optional

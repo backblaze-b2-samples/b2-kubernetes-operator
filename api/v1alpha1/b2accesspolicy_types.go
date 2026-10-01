@@ -86,6 +86,26 @@ type KeyPolicy struct {
 	// than this duration.
 	// +optional
 	MaxValidity *metav1.Duration `json:"maxValidity,omitempty"`
+
+	// AllowedDeliveryTargets lists the remote clusters and namespaces that
+	// keys may be delivered to with spec.deliverTo. Empty allows none.
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	AllowedDeliveryTargets []DeliveryTargetPattern `json:"allowedDeliveryTargets,omitempty"`
+}
+
+// DeliveryTargetPattern allows delivery to matching remote namespaces.
+type DeliveryTargetPattern struct {
+	// RemoteCluster name, or a glob pattern; "*" allows any.
+	// +kubebuilder:validation:MinLength=1
+	RemoteCluster string `json:"remoteCluster"`
+
+	// Namespaces are glob patterns for the remote namespace. {namespace} is
+	// replaced with the requesting namespace, e.g. "{namespace}" or
+	// "storage". Empty allows none.
+	// +listType=set
+	// +optional
+	Namespaces []string `json:"namespaces,omitempty"`
 }
 
 // B2AccessPolicySpec grants the namespaces selected by NamespaceSelector

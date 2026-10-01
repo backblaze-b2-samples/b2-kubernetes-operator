@@ -49,6 +49,7 @@ import (
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2"
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/policy"
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/provider"
+	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/remote"
 )
 
 const (
@@ -79,6 +80,9 @@ type ApplicationKeyReconciler struct {
 	// APIReader reads Secrets that are not in the operator's label-filtered
 	// cache, to avoid overwriting Secrets the operator does not own.
 	APIReader client.Reader
+	// Remote builds clients for RemoteClusters (spec.deliverTo). Nil
+	// disables remote delivery.
+	Remote *remote.Registry
 }
 
 // +kubebuilder:rbac:groups=b2.backblaze.com,resources=applicationkeys,verbs=get;list;watch;update;patch
@@ -171,8 +175,12 @@ func (r *ApplicationKeyReconciler) reconcile(ctx context.Context, key *b2v1.Appl
 		key.Status.ScheduledRevocation = nil
 	}
 
+	store, se := r.store(ctx, key)
+	if se != nil {
+		return result(se, setReady)
+	}
 	secretName := key.SecretNameOrDefault()
-	secret, se := r.getOwnedSecret(ctx, key, secretName)
+	secret, se := r.getOwnedSecret(ctx, key, store, secretName)
 	if se != nil {
 		return result(se, setReady)
 	}
@@ -183,7 +191,7 @@ func (r *ApplicationKeyReconciler) reconcile(ctx context.Context, key *b2v1.Appl
 		if fresh, err := r.isFresh(ctx, key); err != nil || !fresh {
 			return ctrl.Result{RequeueAfter: time.Second}, err
 		}
-		if err := r.revokeOrphans(ctx, acct, key); err != nil {
+		if err := r.revokeOrphans(ctx, acct, key, store); err != nil {
 			return result(providerError("cleaning up an interrupted key creation", err), setReady)
 		}
 	}
@@ -191,20 +199,25 @@ func (r *ApplicationKeyReconciler) reconcile(ctx context.Context, key *b2v1.Appl
 	specHash := keySpecHash(key, target)
 	why := r.replacementReason(ctx, acct, key, secret, specHash, now)
 	if why != "" {
-		if se := r.createAndSwap(ctx, acct, key, orig, secret, target, specHash, why, now); se != nil {
+		if se := r.createAndSwap(ctx, acct, key, orig, store, secret, target, specHash, why, now); se != nil {
 			return result(se, setReady)
 		}
-	} else if err := r.syncSecret(ctx, acct, key, secret, target); err != nil {
-		return ctrl.Result{}, err
+	} else if err := r.syncSecret(ctx, acct, key, store, secret, target); err != nil {
+		return result(remoteErr(store, err), setReady)
 	}
+	key.Status.DeliveredTo = store.where()
 
 	revokeAt, err := r.revokeRetired(ctx, acct, key, now)
 	if err != nil {
 		logger.Error(err, "revoking retired keys; will retry")
 	}
 
+	where := "Secret " + secretName
+	if store.remote != "" {
+		where = fmt.Sprintf("Secret %s/%s in RemoteCluster %s", store.namespace, secretName, store.remote)
+	}
 	setCondition(&key.Status.Conditions, key.Generation, metav1.ConditionTrue, b2v1.ReasonReconciled,
-		fmt.Sprintf("Key %s is current and stored in Secret %s", key.Status.KeyID, secretName))
+		fmt.Sprintf("Key %s is current and stored in %s", key.Status.KeyID, where))
 	return ctrl.Result{RequeueAfter: r.nextWake(key, now, revokeAt)}, nil
 }
 
@@ -326,6 +339,7 @@ func keyPolicyRequest(key *b2v1.ApplicationKey, t keyTarget) policy.KeyRequest {
 		BucketName:     t.bucketName,
 		External:       t.external,
 		Capabilities:   key.Spec.Capabilities,
+		DeliverTo:      key.Spec.DeliverTo,
 	}
 	if key.Spec.ValidFor != nil {
 		req.ValidFor = key.Spec.ValidFor.Duration
@@ -335,23 +349,15 @@ func keyPolicyRequest(key *b2v1.ApplicationKey, t keyTarget) policy.KeyRequest {
 
 // getOwnedSecret returns the key's Secret, nil if it does not exist, or a
 // SecretConflict error if a Secret of that name exists but is not ours.
-func (r *ApplicationKeyReconciler) getOwnedSecret(ctx context.Context, key *b2v1.ApplicationKey, name string) (*corev1.Secret, *stageError) {
-	var s corev1.Secret
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: name}, &s)
-	if apierrors.IsNotFound(err) {
-		// Not in the label-filtered cache; make sure no unowned Secret has the name.
-		err = r.APIReader.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: name}, &s)
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-	}
+func (r *ApplicationKeyReconciler) getOwnedSecret(ctx context.Context, key *b2v1.ApplicationKey, store *secretStore, name string) (*corev1.Secret, *stageError) {
+	sec, err := store.get(ctx, name)
 	if err != nil {
-		return nil, &stageError{reason: b2v1.ReasonProviderError, message: fmt.Sprintf("reading Secret %s: %v", name, err), err: err}
+		return nil, remoteErr(store, fmt.Errorf("reading Secret %s: %w", name, err))
 	}
-	if !metav1.IsControlledBy(&s, key) {
-		return nil, waitFor(b2v1.ReasonSecretConflict, 5*time.Minute, "Secret %q already exists and is not owned by this ApplicationKey; delete it or set spec.secretName", name)
+	if sec != nil && !store.owns(sec, key) {
+		return nil, waitFor(b2v1.ReasonSecretConflict, 5*time.Minute, "Secret %q already exists in %s and is not owned by this ApplicationKey; delete it or set spec.secretName", name, store.where())
 	}
-	return &s, nil
+	return sec, nil
 }
 
 // replacementReason says why a new key is needed, or "" if the current key is fine.
@@ -393,7 +399,7 @@ func (r *ApplicationKeyReconciler) replacementReason(ctx context.Context, acct *
 }
 
 func (r *ApplicationKeyReconciler) createAndSwap(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, orig **b2v1.ApplicationKey,
-	secret *corev1.Secret, t keyTarget, specHash, why string, now time.Time) *stageError {
+	store *secretStore, secret *corev1.Secret, t keyTarget, specHash, why string, now time.Time) *stageError {
 	logger := log.FromContext(ctx)
 
 	// Record the name before creating so a crash cannot orphan the key.
@@ -433,11 +439,11 @@ func (r *ApplicationKeyReconciler) createAndSwap(ctx context.Context, acct *prov
 		return providerError("creating application key", err)
 	}
 
-	if err := r.writeSecret(ctx, acct, key, secret, t, created, specHash); err != nil {
+	if err := r.writeSecret(ctx, acct, key, store, secret, t, created, specHash); err != nil {
 		if rerr := acct.Client.DeleteKey(ctx, created.ApplicationKeyID); rerr == nil {
 			key.Status.PendingKeyName = ""
 		}
-		return &stageError{reason: b2v1.ReasonProviderError, message: fmt.Sprintf("writing Secret: %v", err), err: err}
+		return remoteErr(store, fmt.Errorf("writing Secret: %w", err))
 	}
 
 	if old := key.Status.KeyID; old != "" {
@@ -472,7 +478,7 @@ func (r *ApplicationKeyReconciler) createAndSwap(ctx context.Context, acct *prov
 	return nil
 }
 
-func (r *ApplicationKeyReconciler) writeSecret(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, existing *corev1.Secret, t keyTarget, k *b2.ApplicationKey, specHash string) error {
+func (r *ApplicationKeyReconciler) writeSecret(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, store *secretStore, existing *corev1.Secret, t keyTarget, k *b2.ApplicationKey, specHash string) error {
 	data := secretData(acct, key, t, []byte(k.ApplicationKeyID), []byte(k.ApplicationKey))
 	annotations := map[string]string{
 		annotationKeyID:     k.ApplicationKeyID,
@@ -484,24 +490,27 @@ func (r *ApplicationKeyReconciler) writeSecret(ctx context.Context, acct *provid
 	}
 	if existing == nil {
 		s := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: key.SecretNameOrDefault(), Namespace: key.Namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: key.SecretNameOrDefault(), Namespace: store.namespace},
 			Type:       corev1.SecretTypeOpaque,
 		}
 		applySecretMeta(s, key, annotations)
 		s.Data = data
-		if err := controllerutil.SetControllerReference(key, s, r.Client.Scheme()); err != nil {
+		if err := store.claim(s, key); err != nil {
 			return err
 		}
-		return r.Client.Create(ctx, s, client.FieldOwner(FieldOwner))
+		return store.writer.Create(ctx, s, client.FieldOwner(FieldOwner))
 	}
 	s := existing.DeepCopy()
 	applySecretMeta(s, key, annotations)
+	if err := store.claim(s, key); err != nil {
+		return err
+	}
 	s.Data = data
-	return r.Client.Update(ctx, s, client.FieldOwner(FieldOwner))
+	return store.writer.Update(ctx, s, client.FieldOwner(FieldOwner))
 }
 
 // syncSecret keeps the non-credential parts of an existing Secret current.
-func (r *ApplicationKeyReconciler) syncSecret(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, s *corev1.Secret, t keyTarget) error {
+func (r *ApplicationKeyReconciler) syncSecret(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, store *secretStore, s *corev1.Secret, t keyTarget) error {
 	want := s.DeepCopy()
 	annotations := map[string]string{annotationKeyID: key.Status.KeyID, annotationSpecHash: key.Status.SpecHash}
 	if key.Status.CreatedAt != nil {
@@ -511,12 +520,15 @@ func (r *ApplicationKeyReconciler) syncSecret(ctx context.Context, acct *provide
 		annotations[annotationExpiresAt] = key.Status.ExpiresAt.UTC().Format(time.RFC3339)
 	}
 	applySecretMeta(want, key, annotations)
+	if err := store.claim(want, key); err != nil {
+		return err
+	}
 	want.Data = secretData(acct, key, t, s.Data[b2v1.SecretKeyB2KeyID], s.Data[b2v1.SecretKeyB2Key])
 	if maps.EqualFunc(want.Data, s.Data, func(a, b []byte) bool { return string(a) == string(b) }) &&
 		maps.Equal(want.Labels, s.Labels) && maps.Equal(want.Annotations, s.Annotations) {
 		return nil
 	}
-	return r.Client.Update(ctx, want, client.FieldOwner(FieldOwner))
+	return store.writer.Update(ctx, want, client.FieldOwner(FieldOwner))
 }
 
 func secretData(acct *provider.Account, key *b2v1.ApplicationKey, t keyTarget, keyID, secret []byte) map[string][]byte {
@@ -555,7 +567,7 @@ func applySecretMeta(s *corev1.Secret, key *b2v1.ApplicationKey, annotations map
 // never recorded as current. A key that already reached the Secret (the
 // operator stopped after writing the Secret but before recording status) is
 // adopted as the current key; any other is revoked.
-func (r *ApplicationKeyReconciler) revokeOrphans(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey) error {
+func (r *ApplicationKeyReconciler) revokeOrphans(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey, store *secretStore) error {
 	pending := key.Status.PendingKeyName
 	orphans, err := acct.Client.FindKeys(ctx, func(k b2.ApplicationKey) bool {
 		return k.KeyName == pending && k.ApplicationKeyID != key.Status.KeyID
@@ -563,17 +575,17 @@ func (r *ApplicationKeyReconciler) revokeOrphans(ctx context.Context, acct *prov
 	if err != nil {
 		return err
 	}
-	var delivered corev1.Secret
-	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: key.SecretNameOrDefault()}, &delivered); client.IgnoreNotFound(err) != nil {
+	delivered, err := store.getUncached(ctx, key.SecretNameOrDefault())
+	if err != nil {
 		return err
 	}
 	deliveredID := ""
-	if metav1.IsControlledBy(&delivered, key) {
+	if delivered != nil && store.owns(delivered, key) {
 		deliveredID = string(delivered.Data[b2v1.SecretKeyB2KeyID])
 	}
 	for _, k := range orphans {
 		if k.ApplicationKeyID == deliveredID {
-			r.adoptDeliveredKey(key, &k, &delivered)
+			r.adoptDeliveredKey(key, &k, delivered)
 			continue
 		}
 		if err := r.deleteKey(ctx, acct, k.ApplicationKeyID); err != nil {
@@ -641,7 +653,11 @@ func (r *ApplicationKeyReconciler) revokeRetired(ctx context.Context, acct *prov
 // revokeAll deletes the current, retiring and any pending keys.
 func (r *ApplicationKeyReconciler) revokeAll(ctx context.Context, acct *provider.Account, key *b2v1.ApplicationKey) error {
 	if key.Status.PendingKeyName != "" {
-		if err := r.revokeOrphans(ctx, acct, key); err != nil {
+		store, se := r.store(ctx, key)
+		if se != nil {
+			return se
+		}
+		if err := r.revokeOrphans(ctx, acct, key, store); err != nil {
 			return err
 		}
 	}
@@ -682,18 +698,15 @@ func (r *ApplicationKeyReconciler) deleteKey(ctx context.Context, acct *provider
 }
 
 func (r *ApplicationKeyReconciler) deleteOwnedSecret(ctx context.Context, key *b2v1.ApplicationKey) error {
-	var s corev1.Secret
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: key.Namespace, Name: key.SecretNameOrDefault()}, &s)
-	if apierrors.IsNotFound(err) {
-		return nil
+	store, se := r.store(ctx, key)
+	if se != nil {
+		return se
 	}
-	if err != nil {
+	sec, err := store.getUncached(ctx, key.SecretNameOrDefault())
+	if err != nil || sec == nil || !store.owns(sec, key) {
 		return err
 	}
-	if !metav1.IsControlledBy(&s, key) {
-		return nil
-	}
-	return client.IgnoreNotFound(r.Client.Delete(ctx, &s, client.Preconditions{UID: &s.UID}))
+	return client.IgnoreNotFound(store.writer.Delete(ctx, sec, client.Preconditions{UID: &sec.UID}))
 }
 
 func (r *ApplicationKeyReconciler) finalize(ctx context.Context, key *b2v1.ApplicationKey) (ctrl.Result, error) {
@@ -722,6 +735,11 @@ func (r *ApplicationKeyReconciler) finalize(ctx context.Context, key *b2v1.Appli
 		}
 	}
 	if err := r.deleteOwnedSecret(ctx, key); err != nil {
+		var se *stageError
+		if errors.As(err, &se) {
+			se.message = "cannot delete the Secret: " + se.message + " (remove the finalizer to leave it behind)"
+			return fail(se)
+		}
 		return ctrl.Result{}, err
 	}
 	base := key.DeepCopy()
@@ -828,6 +846,14 @@ func (r *ApplicationKeyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}); err != nil {
 		return err
 	}
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &b2v1.ApplicationKey{}, indexRemoteCluster, func(o client.Object) []string {
+		if t := o.(*b2v1.ApplicationKey).Spec.DeliverTo; t != nil {
+			return []string{t.RemoteCluster}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&b2v1.ApplicationKey{}, builder.WithPredicates(specOrDeletionChanged())).
 		Owns(&corev1.Secret{}).
@@ -835,6 +861,7 @@ func (r *ApplicationKeyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&b2v1.ClusterProviderConfig{}, handler.EnqueueRequestsFromMapFunc(r.keysForProviderConfig), builder.WithPredicates(readinessChanged())).
 		Watches(&b2v1.B2AccessPolicy{}, handler.EnqueueRequestsFromMapFunc(r.allKeys)).
 		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.keysInNamespace), builder.WithPredicates(predicate.LabelChangedPredicate{})).
+		Watches(&b2v1.RemoteCluster{}, handler.EnqueueRequestsFromMapFunc(r.keysForRemoteCluster), builder.WithPredicates(remoteReadinessChanged())).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 4}).
 		Named("applicationkey").
 		Complete(r)
@@ -846,6 +873,19 @@ func (r *ApplicationKeyReconciler) keysForBucket(ctx context.Context, o client.O
 
 func (r *ApplicationKeyReconciler) keysForProviderConfig(ctx context.Context, o client.Object) []reconcile.Request {
 	return r.listRequests(ctx, client.MatchingFields{indexProviderConfig: o.GetName()})
+}
+
+func (r *ApplicationKeyReconciler) keysForRemoteCluster(ctx context.Context, o client.Object) []reconcile.Request {
+	return r.listRequests(ctx, client.MatchingFields{indexRemoteCluster: o.GetName()})
+}
+
+// remoteReadinessChanged passes RemoteCluster events that change readiness.
+func remoteReadinessChanged() predicate.Predicate {
+	return predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok1 := e.ObjectOld.(*b2v1.RemoteCluster)
+		n, ok2 := e.ObjectNew.(*b2v1.RemoteCluster)
+		return !ok1 || !ok2 || meta.IsStatusConditionTrue(o.Status.Conditions, b2v1.ConditionReady) != meta.IsStatusConditionTrue(n.Status.Conditions, b2v1.ConditionReady)
+	}}
 }
 
 func (r *ApplicationKeyReconciler) allKeys(ctx context.Context, _ client.Object) []reconcile.Request {

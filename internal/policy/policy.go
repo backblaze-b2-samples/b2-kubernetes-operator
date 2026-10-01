@@ -73,6 +73,9 @@ type KeyRequest struct {
 	Capabilities []b2v1.Capability
 	// ValidFor is the requested key lifetime; zero means no expiry.
 	ValidFor time.Duration
+	// DeliverTo is the remote cluster and namespace the Secret goes to, if
+	// not the local namespace.
+	DeliverTo *b2v1.DeliveryTarget
 }
 
 // Evaluator loads policies and namespace labels from the cluster.
@@ -185,6 +188,9 @@ func EvaluateKey(policies []b2v1.B2AccessPolicy, nsLabels labels.Set, req KeyReq
 		case !MatchesAny(p.Spec.Buckets.NamePatterns, req.Namespace, req.BucketName):
 			why = append(why, fmt.Sprintf("bucket name %q matches none of %v", req.BucketName, p.Spec.Buckets.NamePatterns))
 		}
+		if t := req.DeliverTo; t != nil && !deliveryAllowed(kp.AllowedDeliveryTargets, req.Namespace, t) {
+			why = append(why, fmt.Sprintf("delivery to namespace %q of remote cluster %q is not allowed", t.Namespace, t.RemoteCluster))
+		}
 		if kp.MaxValidity != nil {
 			if req.ValidFor == 0 {
 				why = append(why, fmt.Sprintf("keys must set validFor (at most %s)", kp.MaxValidity.Duration))
@@ -198,6 +204,15 @@ func EvaluateKey(policies []b2v1.B2AccessPolicy, nsLabels labels.Set, req KeyReq
 		reasons = append(reasons, fmt.Sprintf("policy %s: %s", p.Name, strings.Join(why, ", ")))
 	}
 	return deny(reasons)
+}
+
+func deliveryAllowed(patterns []b2v1.DeliveryTargetPattern, namespace string, t *b2v1.DeliveryTarget) bool {
+	for _, p := range patterns {
+		if Glob(p.RemoteCluster, t.RemoteCluster) && MatchesAny(p.Namespaces, namespace, t.Namespace) {
+			return true
+		}
+	}
+	return false
 }
 
 func applicablePolicies(policies []b2v1.B2AccessPolicy, nsLabels labels.Set, namespace, providerConfig string) ([]b2v1.B2AccessPolicy, Decision) {
