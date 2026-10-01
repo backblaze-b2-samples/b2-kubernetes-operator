@@ -3,7 +3,7 @@
 # Use an application key, not the account's master key. Create one with the
 # B2 CLI, e.g.:
 #   b2 key create b2-operator \
-#     listBuckets,readBuckets,writeBuckets,deleteBuckets,listKeys,writeKeys,deleteKeys,readBucketEncryption,writeBucketEncryption,readBucketRetentions,writeBucketRetentions,listFiles,readFiles,writeFiles,deleteFiles
+#     listBuckets,readBuckets,writeBuckets,deleteBuckets,listKeys,writeKeys,deleteKeys,readBucketEncryption,writeBucketEncryption,readBucketRetentions,writeBucketRetentions,readBucketReplications,writeBucketReplications,listFiles,readFiles,writeFiles,deleteFiles
 # Give it every capability you want tenants' keys to have, too.
 #
 # Then store it (prefer External Secrets / Sealed Secrets in production):

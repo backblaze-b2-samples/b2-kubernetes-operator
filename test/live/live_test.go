@@ -21,6 +21,7 @@ package live
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -218,64 +219,99 @@ func TestLiveApplicationKeyLifecycle(t *testing.T) {
 func TestLiveReplication(t *testing.T) {
 	g := requireLive(t)
 	ctx := context.Background()
-	dst := newBucket("repl-dst", "repl-dst")
-	src := newBucket("repl-src", "repl-src")
-	src.Spec.Replication = []b2v1.ReplicationRule{{
-		Name: "live-rule", DestinationBucketRef: b2v1.LocalBucketReference{Name: "repl-dst"}, FileNamePrefix: "replicated/",
+	// Replication in both directions: each bucket is a source and a
+	// destination, which B2 stores in one configuration per bucket.
+	east := newBucket("repl-east", "repl-east")
+	west := newBucket("repl-west", "repl-west")
+	west.Spec.Replication = []b2v1.ReplicationRule{{
+		Name: "west-to-east", DestinationBucketRef: b2v1.LocalBucketReference{Name: "repl-east"}, FileNamePrefix: "replicated/",
 	}}
-	g.Expect(k8s.Create(ctx, dst)).To(Succeed())
-	t.Cleanup(func() { deleteBucket(NewWithT(t), dst) })
-	g.Expect(k8s.Create(ctx, src)).To(Succeed())
-	t.Cleanup(func() { deleteBucket(NewWithT(t), src) })
-	waitReady(g, dst, bucketConds(dst))
+	east.Spec.Replication = []b2v1.ReplicationRule{{
+		Name: "east-to-west", DestinationBucketRef: b2v1.LocalBucketReference{Name: "repl-west"},
+	}}
+	g.Expect(k8s.Create(ctx, east)).To(Succeed())
+	g.Expect(k8s.Create(ctx, west)).To(Succeed())
+	t.Cleanup(func() {
+		// Rules first, so neither bucket waits on the other.
+		for _, b := range []*b2v1.Bucket{west, east} {
+			update(NewWithT(t), b, func() { b.Spec.Replication = nil })
+		}
+		deleteBucket(NewWithT(t), west)
+		deleteBucket(NewWithT(t), east)
+	})
 
 	// Cloud Replication needs a verified email and payment history; an
 	// account without them cannot run this test.
-	var cond *metav1.Condition
 	notEligible := func(c *metav1.Condition) bool {
 		return c != nil && (strings.Contains(c.Message, b2.CodeNoPaymentHistory) || strings.Contains(c.Message, b2.CodeEmailNotVerified))
 	}
-	g.Eventually(func(g Gomega) {
-		g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(src), src)).To(Succeed())
-		cond = meta.FindStatusCondition(src.Status.Conditions, b2v1.ConditionReady)
-		g.Expect(cond).NotTo(BeNil())
-		g.Expect(cond.Status == metav1.ConditionTrue || notEligible(cond)).To(BeTrue(), "reason %s: %s", cond.Reason, cond.Message)
-	}, timeout, poll).Should(Succeed())
-	if notEligible(cond) {
-		t.Skipf("account cannot use Cloud Replication: %s", cond.Message)
+	for _, b := range []*b2v1.Bucket{west, east} {
+		var cond *metav1.Condition
+		g.Eventually(func(g Gomega) {
+			g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(b), b)).To(Succeed())
+			cond = meta.FindStatusCondition(b.Status.Conditions, b2v1.ConditionReady)
+			g.Expect(cond).NotTo(BeNil())
+			g.Expect(cond.Status == metav1.ConditionTrue || notEligible(cond)).To(BeTrue(), "%s: reason %s: %s", b.Name, cond.Reason, cond.Message)
+		}, timeout, poll).Should(Succeed())
+		if notEligible(cond) {
+			t.Skipf("account cannot use Cloud Replication: %s", cond.Message)
+		}
 	}
 
-	rs := src.Status.Replication
-	g.Expect(rs).NotTo(BeNil())
-	srcRC := b2Bucket(g, src.Spec.BucketName).ReplicationConfiguration.Value.AsReplicationSource
-	g.Expect(srcRC.ReplicationRules).To(HaveLen(1))
-	g.Expect(srcRC.ReplicationRules[0].DestinationBucketID).To(Equal(dst.Status.BucketID))
-	g.Expect(srcRC.ReplicationRules[0].FileNamePrefix).To(Equal("replicated/"))
-	g.Expect(srcRC.SourceApplicationKeyID).To(HaveValue(Equal(rs.SourceKeyID)))
-	dstRC := b2Bucket(g, dst.Spec.BucketName).ReplicationConfiguration.Value.AsReplicationDestination
-	g.Expect(dstRC.SourceToDestinationKeyMapping).To(HaveKeyWithValue(rs.SourceKeyID, rs.Destinations[0].KeyID))
-	expectStable(g, src)
+	replication := func(b *b2v1.Bucket) *b2.ReplicationConfiguration {
+		rc := b2Bucket(g, b.Spec.BucketName).ReplicationConfiguration
+		g.Expect(rc.IsClientAuthorizedToRead).To(BeTrue())
+		if rc.Value == nil {
+			return &b2.ReplicationConfiguration{}
+		}
+		return rc.Value
+	}
+	ws, es := west.Status.Replication, east.Status.Replication
+	g.Expect(ws).NotTo(BeNil())
+	g.Expect(es).NotTo(BeNil())
+	w, e := replication(west), replication(east)
+	g.Expect(w.AsReplicationSource).NotTo(BeNil(), "west lost its rule")
+	g.Expect(w.AsReplicationSource.ReplicationRules).To(HaveLen(1))
+	g.Expect(w.AsReplicationSource.ReplicationRules[0].DestinationBucketID).To(Equal(east.Status.BucketID))
+	g.Expect(w.AsReplicationSource.ReplicationRules[0].FileNamePrefix).To(Equal("replicated/"))
+	g.Expect(w.AsReplicationSource.SourceApplicationKeyID).To(HaveValue(Equal(ws.SourceKeyID)))
+	g.Expect(w.AsReplicationDestination).NotTo(BeNil(), "west lost the mapping for east's rule")
+	g.Expect(w.AsReplicationDestination.SourceToDestinationKeyMapping).To(HaveKeyWithValue(es.SourceKeyID, es.Destinations[0].KeyID))
+	g.Expect(e.AsReplicationSource).NotTo(BeNil(), "east lost its rule")
+	g.Expect(e.AsReplicationDestination).NotTo(BeNil(), "east lost the mapping for west's rule")
+	g.Expect(e.AsReplicationDestination.SourceToDestinationKeyMapping).To(HaveKeyWithValue(ws.SourceKeyID, ws.Destinations[0].KeyID))
+	expectStable(g, west)
+	expectStable(g, east)
 
-	// Removing the rule clears both sides and revokes both keys; this is the
-	// request format the docs leave open.
-	srcKey, dstKey := rs.SourceKeyID, rs.Destinations[0].KeyID
-	update(g, src, func() { src.Spec.Replication = nil })
-	waitReady(g, src, bucketConds(src))
-	after := b2Bucket(g, src.Spec.BucketName).ReplicationConfiguration
-	t.Logf("B2 reports cleared replication source as: %+v", after.Value)
-	if after.Value != nil && after.Value.AsReplicationSource != nil {
-		g.Expect(after.Value.AsReplicationSource.ReplicationRules).To(BeEmpty())
-	}
-	dstAfter := b2Bucket(g, dst.Spec.BucketName).ReplicationConfiguration
-	if dstAfter.Value != nil && dstAfter.Value.AsReplicationDestination != nil {
-		g.Expect(dstAfter.Value.AsReplicationDestination.SourceToDestinationKeyMapping).NotTo(HaveKey(srcKey))
-	}
-	for _, id := range []string{srcKey, dstKey} {
+	// Removing one direction keeps the other on both buckets, and revokes
+	// that direction's keys.
+	westSrc, westDst := ws.SourceKeyID, ws.Destinations[0].KeyID
+	update(g, west, func() { west.Spec.Replication = nil })
+	waitReady(g, west, bucketConds(west))
+	w, e = replication(west), replication(east)
+	t.Logf("after removing west's rule: west=%s east=%s", describe(w), describe(e))
+	g.Expect(w.AsReplicationSource).To(BeNil())
+	g.Expect(w.AsReplicationDestination).NotTo(BeNil(), "west must still receive from east")
+	g.Expect(e.AsReplicationSource).NotTo(BeNil(), "east must still replicate to west")
+	g.Expect(e.AsReplicationDestination).To(BeNil())
+	for _, id := range []string{westSrc, westDst} {
 		exists, err := direct.KeyExists(ctx, id)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(exists).To(BeFalse(), "replication key %s not revoked", id)
 	}
-	expectStable(g, src)
+	expectStable(g, west)
+	expectStable(g, east)
+}
+
+func describe(rc *b2.ReplicationConfiguration) string {
+	out := "none"
+	if rc.AsReplicationSource != nil {
+		out = fmt.Sprintf("source(%d rules)", len(rc.AsReplicationSource.ReplicationRules))
+	}
+	if rc.AsReplicationDestination != nil {
+		out += fmt.Sprintf(" destination(%d mappings)", len(rc.AsReplicationDestination.SourceToDestinationKeyMapping))
+	}
+	return out
 }
 
 // TestLivePartnerAccount creates a real B2 account in a Partner API Group.

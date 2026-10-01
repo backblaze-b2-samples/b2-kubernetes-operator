@@ -168,8 +168,8 @@ type ObjectLock struct {
 
 // ReplicationRule is a Cloud Replication rule from this bucket.
 type ReplicationRule struct {
-	// Name of the rule in B2.
-	// +kubebuilder:validation:MinLength=1
+	// Name of the rule in B2 (B2 requires at least 6 characters).
+	// +kubebuilder:validation:MinLength=6
 	// +kubebuilder:validation:MaxLength=50
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9-]+$`
 	Name string `json:"name"`

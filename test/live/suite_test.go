@@ -227,10 +227,8 @@ func sweepB2(ctx context.Context) {
 			continue
 		}
 		if rc := b.ReplicationConfiguration; rc != nil && rc.Value != nil && (rc.Value.AsReplicationSource != nil || rc.Value.AsReplicationDestination != nil) {
-			_, _ = direct.UpdateBucket(ctx, b2.UpdateBucketRequest{BucketID: b.BucketID, ReplicationConfiguration: &b2.ReplicationConfiguration{
-				AsReplicationSource:      &b2.ReplicationSource{ReplicationRules: []b2.ReplicationRule{}},
-				AsReplicationDestination: &b2.ReplicationDestination{SourceToDestinationKeyMapping: map[string]string{}},
-			}})
+			// An empty configuration clears both sides.
+			_, _ = direct.UpdateBucket(ctx, b2.UpdateBucketRequest{BucketID: b.BucketID, ReplicationConfiguration: &b2.ReplicationConfiguration{}})
 		}
 		fmt.Fprintf(os.Stderr, "cleanup: deleting leftover bucket %s\n", b.BucketName)
 		if err := direct.DeleteBucket(ctx, b.BucketID); err != nil {

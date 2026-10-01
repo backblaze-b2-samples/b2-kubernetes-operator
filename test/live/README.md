@@ -24,6 +24,22 @@ After resources become ready, most tests resync twice and assert that the bucket
 
 Open questions are answered in the test log; run with `-v` (the Makefile does) and look for lines starting `B2 reports` and `b2_`.
 
+`readBucketReplications` and `writeBucketReplications` are not listed in the v4 `b2_create_key` reference, but B2 accepts them and requires them to read and change replication settings. This was confirmed by this suite against the live API.
+
+## B2 behaviour confirmed by this suite
+
+These were checked against the live API (October 2026). Where they differ from the API reference, the operator and the fake in `internal/b2/b2fake` follow the live behaviour.
+
+| Behaviour | Live API |
+| --- | --- |
+| Updating `replicationConfiguration` | **Replaces the whole configuration.** A side that is omitted or `null` is removed, contrary to the reference. The operator always sends both sides. |
+| Clearing replication | An empty rule list (`replicationRules is empty`) and an empty key mapping (`sourceToDestinationKeyMapping is empty`) are rejected. Omit the side instead. `{}` clears everything. |
+| Replication rule names | At least 6 characters. |
+| Reading/changing replication settings | Needs `readBucketReplications` / `writeBucketReplications`. These are not in the v4 `b2_create_key` reference, but are accepted. |
+| Default encryption turned off | Reported as `{"mode": null, "algorithm": null}`. |
+| Object Lock default retention cleared | Reported as `{"mode": null, "period": null}`. |
+| `b2_delete_key` for a key that no longer exists | Succeeds. |
+
 ## Credentials
 
 Use a **dedicated test account with a spend cap**. The key needs:
@@ -35,12 +51,13 @@ readBucketEncryption writeBucketEncryption
 readBucketRetentions writeBucketRetentions
 listFiles readFiles writeFiles deleteFiles
 readFileLegalHolds writeFileLegalHolds readFileRetentions writeFileRetentions
+readBucketReplications writeBucketReplications
 ```
 
 With the B2 CLI:
 
 ```sh
-b2 key create b2-operator-live-tests listBuckets,readBuckets,writeBuckets,deleteBuckets,listKeys,writeKeys,deleteKeys,readBucketEncryption,writeBucketEncryption,readBucketRetentions,writeBucketRetentions,listFiles,readFiles,writeFiles,deleteFiles,readFileLegalHolds,writeFileLegalHolds,readFileRetentions,writeFileRetentions
+b2 key create b2-operator-live-tests listBuckets,readBuckets,writeBuckets,deleteBuckets,listKeys,writeKeys,deleteKeys,readBucketEncryption,writeBucketEncryption,readBucketRetentions,writeBucketRetentions,listFiles,readFiles,writeFiles,deleteFiles,readFileLegalHolds,writeFileLegalHolds,readFileRetentions,writeFileRetentions,readBucketReplications,writeBucketReplications
 ```
 
 ## What it creates and cleans up

@@ -233,6 +233,29 @@ func TestBucketLimitPerAccount(t *testing.T) {
 	}
 }
 
+// Like B2, protected bucket settings are only visible to keys holding the
+// matching read capability (observed against the real API).
+func TestProtectedSettingsNeedReadCapabilities(t *testing.T) {
+	srv := startFake(t)
+	admin := newClient(t, srv)
+	ctx := context.Background()
+	if _, err := admin.CreateBucket(ctx, b2.CreateBucketRequest{BucketName: "protected-settings", BucketType: b2.BucketTypeAllPrivate}); err != nil {
+		t.Fatal(err)
+	}
+	id, secret := srv.AddKey("plain", []string{"listBuckets", "readBuckets"}, nil, "")
+	c := b2.New(b2.Options{BaseURL: srv.URL(), ApplicationKeyID: id, ApplicationKey: secret})
+	b, err := c.GetBucketByName(ctx, "protected-settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.ReplicationConfiguration.IsClientAuthorizedToRead || b.DefaultServerSideEncryption.IsClientAuthorizedToRead || b.FileLockConfiguration.IsClientAuthorizedToRead {
+		t.Errorf("settings readable without their capabilities: %+v", b)
+	}
+	if b.ReplicationConfiguration.Value != nil {
+		t.Error("replication settings leaked without readBucketReplications")
+	}
+}
+
 func TestKeys(t *testing.T) {
 	srv := startFake(t)
 	c := newClient(t, srv)

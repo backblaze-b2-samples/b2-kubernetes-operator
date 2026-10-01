@@ -116,6 +116,8 @@ spec:
                   - bypassGovernance
                   - readBucketLogging
                   - writeBucketLogging
+                  - readBucketReplications
+                  - writeBucketReplications
                   type: string
                 maxItems: 32
                 minItems: 1

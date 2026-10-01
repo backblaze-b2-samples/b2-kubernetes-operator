@@ -280,6 +280,9 @@ var AllCapabilities = []string{
 	"writeBucketNotifications", "listFiles", "readFiles", "shareFiles", "writeFiles", "deleteFiles",
 	"readFileLegalHolds", "writeFileLegalHolds", "readFileRetentions", "writeFileRetentions",
 	"bypassGovernance", "readBucketLogging", "writeBucketLogging",
+	// Not in the v4 b2_create_key reference, but accepted by B2 and required
+	// to read and change Cloud Replication settings.
+	"readBucketReplications", "writeBucketReplications",
 }
 
 // IsMasterKey reports whether keyID is the account's master application key,

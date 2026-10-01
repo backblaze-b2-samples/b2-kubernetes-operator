@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -315,7 +316,7 @@ func TestCrossAccountReplication(t *testing.T) {
 	src := newBucket(ns, "data", ns+"-data")
 	src.Spec.ProviderConfigRef.Name = c2002 + "-west"
 	src.Spec.LifecycleRules = []b2v1.LifecycleRule{{DaysFromHidingToDeleting: ptr[int32](30)}}
-	src.Spec.Replication = []b2v1.ReplicationRule{{Name: "to-eu", DestinationBucketRef: b2v1.LocalBucketReference{Name: "backup"}, IncludeExistingFiles: true}}
+	src.Spec.Replication = []b2v1.ReplicationRule{{Name: "to-eu-central", DestinationBucketRef: b2v1.LocalBucketReference{Name: "backup"}, IncludeExistingFiles: true}}
 	g.Expect(k8s.Create(ctx, src)).To(Succeed())
 	g.Expect(k8s.Create(ctx, dst)).To(Succeed())
 
@@ -366,7 +367,7 @@ func TestReplicationNeedsPolicy(t *testing.T) {
 	ns := newNamespace(t, true) // tenant policy does not allow replication
 	readyBucket(g, ns, "b")
 	src := newBucket(ns, "a", ns+"-a")
-	src.Spec.Replication = []b2v1.ReplicationRule{{Name: "r", DestinationBucketRef: b2v1.LocalBucketReference{Name: "b"}}}
+	src.Spec.Replication = []b2v1.ReplicationRule{{Name: "replicate", DestinationBucketRef: b2v1.LocalBucketReference{Name: "b"}}}
 	g.Expect(k8s.Create(ctx, src)).To(Succeed())
 	eventuallyReason(g, src, bucketConds(src), b2v1.ReasonPolicyDenied)
 }
@@ -379,4 +380,68 @@ func TestUnencryptedBucketNeedsPolicy(t *testing.T) {
 	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
 	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonPolicyDenied)
 	g.Expect(fakeB2.Bucket(ns + "-plain")).To(BeNil())
+}
+
+// Each bucket is both a replication source and a destination. B2 replaces a
+// bucket's whole replication configuration on every update, so updating one
+// side must carry the other along.
+func TestBidirectionalReplicationKeepsBothSides(t *testing.T) {
+	g := requireEnv(t)
+	ctx := context.Background()
+	c := uniqueCustomer("cust4004")
+	acct := newAccount(c, c, "us-west")
+	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
+	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonReconciled)
+	pc := &b2v1.ClusterProviderConfig{ObjectMeta: metav1.ObjectMeta{Name: c}}
+	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonReconciled)
+
+	ns := createNamespace(t, c+"-app", map[string]string{"customer": c})
+	west := newBucket(ns, "west", ns+"-west")
+	east := newBucket(ns, "east", ns+"-east")
+	for _, b := range []*b2v1.Bucket{west, east} {
+		b.Spec.ProviderConfigRef.Name = c
+	}
+	west.Spec.Replication = []b2v1.ReplicationRule{{Name: "west-to-east", DestinationBucketRef: b2v1.LocalBucketReference{Name: "east"}}}
+	east.Spec.Replication = []b2v1.ReplicationRule{{Name: "east-to-west", DestinationBucketRef: b2v1.LocalBucketReference{Name: "west"}}}
+	g.Expect(k8s.Create(ctx, west)).To(Succeed())
+	g.Expect(k8s.Create(ctx, east)).To(Succeed())
+
+	bothSides := func(g Gomega, name string) {
+		rc := fakeB2.Bucket(name).ReplicationConfiguration.Value
+		g.Expect(rc).NotTo(BeNil())
+		g.Expect(rc.AsReplicationSource).NotTo(BeNil(), "%s lost its replication rule", name)
+		g.Expect(rc.AsReplicationSource.ReplicationRules).To(HaveLen(1))
+		g.Expect(rc.AsReplicationDestination).NotTo(BeNil(), "%s lost its destination key mapping", name)
+		g.Expect(rc.AsReplicationDestination.SourceToDestinationKeyMapping).To(HaveLen(1))
+	}
+	g.Eventually(func(g Gomega) {
+		for _, b := range []*b2v1.Bucket{west, east} {
+			g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(b), b)).To(Succeed())
+			g.Expect(meta.IsStatusConditionTrue(b.Status.Conditions, b2v1.ConditionReady)).To(BeTrue())
+		}
+		bothSides(g, west.Spec.BucketName)
+		bothSides(g, east.Spec.BucketName)
+	}, timeout, poll).Should(Succeed())
+
+	// Dropping one direction keeps the other intact on both buckets.
+	g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(east), east)).To(Succeed())
+	east.Spec.Replication = nil
+	g.Expect(k8s.Update(ctx, east)).To(Succeed())
+	g.Eventually(func(g Gomega) {
+		e := fakeB2.Bucket(east.Spec.BucketName).ReplicationConfiguration.Value
+		g.Expect(e.AsReplicationSource).To(BeNil())
+		g.Expect(e.AsReplicationDestination).NotTo(BeNil(), "east must still receive from west")
+		w := fakeB2.Bucket(west.Spec.BucketName).ReplicationConfiguration.Value
+		g.Expect(w.AsReplicationSource).NotTo(BeNil(), "west must still replicate to east")
+		g.Expect(w.AsReplicationDestination).To(BeNil())
+	}, timeout, poll).Should(Succeed())
+}
+
+func TestReplicationRuleNameNeedsSixCharacters(t *testing.T) {
+	g := requireEnv(t)
+	ns := newNamespace(t, true)
+	b := newBucket(ns, "short-rule", ns+"-short-rule")
+	b.Spec.Replication = []b2v1.ReplicationRule{{Name: "short", DestinationBucketRef: b2v1.LocalBucketReference{Name: "x"}}}
+	err := k8s.Create(context.Background(), b)
+	g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "err = %v", err)
 }

@@ -67,7 +67,7 @@ func (r ProviderConfigReference) ProviderConfigName() string {
 }
 
 // Capability is a B2 application key capability.
-// +kubebuilder:validation:Enum=listKeys;writeKeys;deleteKeys;listAllBucketNames;listBuckets;readBuckets;writeBuckets;deleteBuckets;readBucketRetentions;writeBucketRetentions;readBucketEncryption;writeBucketEncryption;readBucketNotifications;writeBucketNotifications;listFiles;readFiles;shareFiles;writeFiles;deleteFiles;readFileLegalHolds;writeFileLegalHolds;readFileRetentions;writeFileRetentions;bypassGovernance;readBucketLogging;writeBucketLogging
+// +kubebuilder:validation:Enum=listKeys;writeKeys;deleteKeys;listAllBucketNames;listBuckets;readBuckets;writeBuckets;deleteBuckets;readBucketRetentions;writeBucketRetentions;readBucketEncryption;writeBucketEncryption;readBucketNotifications;writeBucketNotifications;listFiles;readFiles;shareFiles;writeFiles;deleteFiles;readFileLegalHolds;writeFileLegalHolds;readFileRetentions;writeFileRetentions;bypassGovernance;readBucketLogging;writeBucketLogging;readBucketReplications;writeBucketReplications
 type Capability string
 
 // KeyManagementCapabilities let a key create, list or delete other keys. A

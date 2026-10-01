@@ -42,6 +42,8 @@ import (
 // operatorCapabilities are what the operator key needs for full function.
 var operatorCapabilities = []string{
 	"listBuckets", "writeBuckets", "deleteBuckets", "listKeys", "writeKeys", "deleteKeys",
+	"readBucketEncryption", "writeBucketEncryption", "readBucketRetentions", "writeBucketRetentions",
+	"readBucketReplications", "writeBucketReplications",
 }
 
 // ClusterProviderConfigReconciler validates B2 credentials and publishes the

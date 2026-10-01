@@ -344,9 +344,10 @@ spec:
                         rule was created.
                       type: boolean
                     name:
-                      description: Name of the rule in B2.
+                      description: Name of the rule in B2 (B2 requires at least 6
+                        characters).
                       maxLength: 50
-                      minLength: 1
+                      minLength: 6
                       pattern: ^[A-Za-z0-9-]+$
                       type: string
                     priority:

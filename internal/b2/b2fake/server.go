@@ -112,6 +112,7 @@ type Server struct {
 	tokens        map[string]string // token -> applicationKeyId
 	buckets       map[string]*bucket
 	reservedNames map[string]bool // names owned by other accounts
+	caller        *key            // key of the request being served (under mu)
 	faults        map[string][]Fault
 	calls         map[string]int
 	nextID        int
@@ -417,6 +418,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, Fault{Status: 401, Code: "unauthorized", Message: "key lacks capability " + h.capability})
 		return
 	}
+	s.caller = caller
 	out, fault := h.fn(caller, body)
 	if fault != nil {
 		writeErr(w, *fault)
@@ -619,6 +621,18 @@ func (s *Server) updateBucket(caller *key, body map[string]json.RawMessage) (any
 			next.sse = req.DefaultServerSideEncryption
 		}
 	}
+	for _, need := range []struct {
+		set        bool
+		capability string
+	}{
+		{req.ReplicationConfiguration != nil, "writeBucketReplications"},
+		{req.DefaultServerSideEncryption != nil, "writeBucketEncryption"},
+		{req.DefaultRetention != nil || req.FileLockEnabled != nil, "writeBucketRetentions"},
+	} {
+		if need.set && !slices.Contains(caller.Capabilities, need.capability) {
+			return nil, &Fault{Status: 401, Code: "unauthorized", Message: "key lacks capability " + need.capability}
+		}
+	}
 	if rc := req.ReplicationConfiguration; rc != nil {
 		if f := s.applyReplication(caller, &next, rc); f != nil {
 			return nil, f
@@ -695,7 +709,12 @@ func (s *Server) deleteKey(caller *key, body map[string]json.RawMessage) (any, *
 		return nil, f
 	}
 	k, ok := s.keys[req.ApplicationKeyID]
-	if !ok || k.master || k.AccountID != caller.AccountID {
+	if !ok {
+		// Observed on the live API: deleting a key that no longer exists
+		// succeeds.
+		return b2.ApplicationKey{ApplicationKeyID: req.ApplicationKeyID}, nil
+	}
+	if k.master || k.AccountID != caller.AccountID {
 		return nil, badRequest("applicationKeyId is not valid: %s", req.ApplicationKeyID)
 	}
 	delete(s.keys, req.ApplicationKeyID)
@@ -765,18 +784,29 @@ func (s *Server) renderBucket(b *bucket) b2.Bucket {
 	out.BucketInfo = maps(b.BucketInfo)
 	out.CORSRules = emptyIfNil(slices.Clone(b.CORSRules))
 	out.LifecycleRules = emptyIfNil(slices.Clone(b.LifecycleRules))
+	// Like B2, settings are only shown to keys with the read capability.
+	can := func(c string) bool { return s.caller == nil || slices.Contains(s.caller.Capabilities, c) }
 	sse := &b2.ServerSideEncryption{}
 	if b.sse != nil {
 		sse = b.sse
 	}
-	out.DefaultServerSideEncryption = &b2.ProtectedSSE{IsClientAuthorizedToRead: true, Value: sse}
+	out.DefaultServerSideEncryption = &b2.ProtectedSSE{IsClientAuthorizedToRead: can("readBucketEncryption")}
+	if out.DefaultServerSideEncryption.IsClientAuthorizedToRead {
+		out.DefaultServerSideEncryption.Value = sse
+	}
 	fl := b.fileLock
 	if fl.DefaultRetention == nil {
 		fl.DefaultRetention = &b2.DefaultRetention{}
 	}
-	out.FileLockConfiguration = &b2.ProtectedFileLock{IsClientAuthorizedToRead: true, Value: &fl}
+	out.FileLockConfiguration = &b2.ProtectedFileLock{IsClientAuthorizedToRead: can("readBucketRetentions")}
+	if out.FileLockConfiguration.IsClientAuthorizedToRead {
+		out.FileLockConfiguration.Value = &fl
+	}
 	rc := b.replication
-	out.ReplicationConfiguration = &b2.ProtectedReplication{IsClientAuthorizedToRead: true, Value: &rc}
+	out.ReplicationConfiguration = &b2.ProtectedReplication{IsClientAuthorizedToRead: can("readBucketReplications")}
+	if out.ReplicationConfiguration.IsClientAuthorizedToRead {
+		out.ReplicationConfiguration.Value = &rc
+	}
 	return out
 }
 
@@ -903,40 +933,51 @@ func (s *Server) adminsGroup(accountID string) bool {
 	return false
 }
 
+// applyReplication replaces b's whole replication configuration, as B2 does
+// (observed on the live API): a side that is absent or null is removed,
+// regardless of what was configured before. Empty rule lists and empty key
+// mappings are rejected with B2's messages.
 func (s *Server) applyReplication(caller *key, b *bucket, rc *b2.ReplicationConfiguration) *Fault {
+	next := b2.ReplicationConfiguration{}
 	if src := rc.AsReplicationSource; src != nil {
-		if len(src.ReplicationRules) > 2 {
+		switch {
+		case src.ReplicationRules == nil:
+			return badRequest("required field replicationRules is missing")
+		case len(src.ReplicationRules) == 0:
+			return badRequest("replicationRules is empty")
+		case len(src.ReplicationRules) > 2:
 			return badRequest("a bucket may have at most 2 replication rules")
+		case src.SourceApplicationKeyID == nil:
+			return badRequest("required field sourceApplicationKeyId is missing")
 		}
-		if len(src.ReplicationRules) == 0 {
-			b.replication.AsReplicationSource = nil
-		} else {
-			if src.SourceApplicationKeyID == nil {
-				return badRequest("sourceApplicationKeyId is required with replication rules")
-			}
-			k, ok := s.keys[*src.SourceApplicationKeyID]
-			if !ok || k.AccountID != caller.AccountID {
-				return badRequest("invalid sourceApplicationKeyId")
-			}
-			for _, c := range []string{"readFiles", "readFileLegalHolds", "readFileRetentions"} {
-				if !slices.Contains(k.Capabilities, c) {
-					return badRequest("source key lacks %s", c)
-				}
-			}
-			for _, r := range src.ReplicationRules {
-				if _, ok := s.buckets[r.DestinationBucketID]; !ok {
-					return &Fault{Status: 400, Code: b2.CodeBadBucketID, Message: "invalid destinationBucketId"}
-				}
-				if r.ReplicationRuleName == "" || r.Priority < 1 {
-					return badRequest("invalid replication rule")
-				}
-			}
-			cp := *src
-			cp.ReplicationRules = slices.Clone(src.ReplicationRules)
-			b.replication.AsReplicationSource = &cp
+		k, ok := s.keys[*src.SourceApplicationKeyID]
+		if !ok || k.AccountID != caller.AccountID {
+			return badRequest("invalid sourceApplicationKeyId")
 		}
+		for _, c := range []string{"readFiles", "readFileLegalHolds", "readFileRetentions"} {
+			if !slices.Contains(k.Capabilities, c) {
+				return badRequest("source key lacks %s", c)
+			}
+		}
+		for _, r := range src.ReplicationRules {
+			if len(r.ReplicationRuleName) < 6 {
+				return badRequest("replicationRuleName must be at least 6 characters long")
+			}
+			if _, ok := s.buckets[r.DestinationBucketID]; !ok {
+				return &Fault{Status: 400, Code: b2.CodeBadBucketID, Message: "invalid destinationBucketId"}
+			}
+			if r.Priority < 1 {
+				return badRequest("invalid priority")
+			}
+		}
+		cp := *src
+		cp.ReplicationRules = slices.Clone(src.ReplicationRules)
+		next.AsReplicationSource = &cp
 	}
 	if dst := rc.AsReplicationDestination; dst != nil {
+		if len(dst.SourceToDestinationKeyMapping) == 0 {
+			return badRequest("sourceToDestinationKeyMapping is empty")
+		}
 		for _, destKey := range dst.SourceToDestinationKeyMapping {
 			k, ok := s.keys[destKey]
 			if !ok || k.AccountID != caller.AccountID {
@@ -948,12 +989,9 @@ func (s *Server) applyReplication(caller *key, b *bucket, rc *b2.ReplicationConf
 				}
 			}
 		}
-		if len(dst.SourceToDestinationKeyMapping) == 0 {
-			b.replication.AsReplicationDestination = nil
-		} else {
-			b.replication.AsReplicationDestination = &b2.ReplicationDestination{SourceToDestinationKeyMapping: maps(dst.SourceToDestinationKeyMapping)}
-		}
+		next.AsReplicationDestination = &b2.ReplicationDestination{SourceToDestinationKeyMapping: maps(dst.SourceToDestinationKeyMapping)}
 	}
+	b.replication = next
 	return nil
 }
 

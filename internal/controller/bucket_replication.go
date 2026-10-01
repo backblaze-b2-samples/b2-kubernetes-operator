@@ -26,7 +26,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -64,7 +63,7 @@ type replicationTarget struct {
 func (r *BucketReconciler) reconcileReplication(ctx context.Context, acct *provider.Account, bkt *b2v1.Bucket, observed *b2.Bucket) (*b2.Bucket, *stageError) {
 	rc := observed.ReplicationConfiguration
 	if rc != nil && !rc.IsClientAuthorizedToRead && (len(bkt.Spec.Replication) > 0 || bkt.Status.Replication != nil) {
-		return nil, waitFor(b2v1.ReasonReplicationNotReady, 10*time.Minute, "cannot read replication settings; the operator's key needs readBuckets")
+		return nil, waitFor(b2v1.ReasonReplicationNotReady, 10*time.Minute, "cannot read replication settings; the operator's key needs the readBucketReplications and writeBucketReplications capabilities")
 	}
 
 	targets := map[string]*replicationTarget{} // by destination Bucket name
@@ -80,8 +79,11 @@ func (r *BucketReconciler) reconcileReplication(ctx context.Context, acct *provi
 		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: bkt.Namespace, Name: name}, &dst); err != nil {
 			return nil, waitFor(b2v1.ReasonReplicationNotReady, 30*time.Second, "destination Bucket %q: %v", name, client.IgnoreNotFound(err))
 		}
-		if !dst.DeletionTimestamp.IsZero() || dst.Status.BucketID == "" || !meta.IsStatusConditionTrue(dst.Status.Conditions, b2v1.ConditionReady) {
-			return nil, waitFor(b2v1.ReasonReplicationNotReady, 30*time.Second, "waiting for destination Bucket %q to be ready", name)
+		// The destination only needs to exist in B2. Waiting for it to be
+		// Ready would deadlock bidirectional replication, since Ready
+		// includes the destination's own replication.
+		if !dst.DeletionTimestamp.IsZero() || dst.Status.BucketID == "" {
+			return nil, waitFor(b2v1.ReasonReplicationNotReady, 30*time.Second, "waiting for destination Bucket %q to be created", name)
 		}
 		pcName := dst.Spec.ProviderConfigRef.ProviderConfigName()
 		dstAcct, se := r.resolveAccount(ctx, pcName)
@@ -132,7 +134,7 @@ func (r *BucketReconciler) reconcileReplication(ctx context.Context, acct *provi
 		updated, err := acct.Client.UpdateBucket(ctx, b2.UpdateBucketRequest{
 			BucketID:                 observed.BucketID,
 			IfRevisionIs:             observed.Revision,
-			ReplicationConfiguration: &b2.ReplicationConfiguration{AsReplicationSource: want},
+			ReplicationConfiguration: withSource(observed, want),
 		})
 		if err != nil {
 			if b2.HasCode(err, b2.CodeConflict) {
@@ -141,7 +143,11 @@ func (r *BucketReconciler) reconcileReplication(ctx context.Context, acct *provi
 			return nil, providerError("updating replication rules", err)
 		}
 		observed = updated
-		r.Recorder.Eventf(bkt, nil, corev1.EventTypeNormal, "ReplicationUpdated", "Update", "Replication now has %d rule(s)", len(want.ReplicationRules))
+		rules := 0
+		if want != nil {
+			rules = len(want.ReplicationRules)
+		}
+		r.Recorder.Eventf(bkt, nil, corev1.EventTypeNormal, "ReplicationUpdated", "Update", "Replication now has %d rule(s)", rules)
 	}
 
 	// Tear down destinations that are no longer used.
@@ -233,11 +239,9 @@ func (r *BucketReconciler) setKeyMapping(ctx context.Context, acct *provider.Acc
 		return nil
 	}
 	_, err = acct.Client.UpdateBucket(ctx, b2.UpdateBucketRequest{
-		BucketID:     bucketID,
-		IfRevisionIs: b.Revision,
-		ReplicationConfiguration: &b2.ReplicationConfiguration{
-			AsReplicationDestination: &b2.ReplicationDestination{SourceToDestinationKeyMapping: want},
-		},
+		BucketID:                 bucketID,
+		IfRevisionIs:             b.Revision,
+		ReplicationConfiguration: withDestination(b, want),
 	})
 	if b2.HasCode(err, b2.CodeConflict) {
 		return waitFor(b2v1.ReasonReconciling, time.Second, "destination bucket changed concurrently")
@@ -266,13 +270,10 @@ func (r *BucketReconciler) removeDestination(ctx context.Context, sourceKeyID st
 				delete(mapping, src)
 			}
 		}
-		if mapping == nil {
-			mapping = map[string]string{}
-		}
 		_, err := dstAcct.Client.UpdateBucket(ctx, b2.UpdateBucketRequest{
 			BucketID:                 d.BucketID,
 			IfRevisionIs:             b.Revision,
-			ReplicationConfiguration: &b2.ReplicationConfiguration{AsReplicationDestination: &b2.ReplicationDestination{SourceToDestinationKeyMapping: mapping}},
+			ReplicationConfiguration: withDestination(b, mapping),
 		})
 		if err != nil {
 			return err
@@ -298,10 +299,47 @@ func desiredReplicationSource(bkt *b2v1.Bucket, targets map[string]*replicationT
 			Priority:             priority,
 		})
 	}
-	if len(src.ReplicationRules) > 0 {
-		src.SourceApplicationKeyID = b2.Ptr(sourceKeyID)
+	if len(src.ReplicationRules) == 0 {
+		return nil
 	}
+	src.SourceApplicationKeyID = b2.Ptr(sourceKeyID)
 	return src
+}
+
+// B2 replaces a bucket's whole replicationConfiguration on every update,
+// whatever the API reference says about omitted sides (observed on the live
+// API: sending only one side clears the other, and null clears both). So
+// every update sends both sides, the untouched one copied from B2. An empty
+// side is omitted, since B2 rejects empty rule lists and empty mappings.
+
+// withSource returns b's replication configuration with its source side
+// replaced by src (nil removes it).
+func withSource(b *b2.Bucket, src *b2.ReplicationSource) *b2.ReplicationConfiguration {
+	rc := &b2.ReplicationConfiguration{AsReplicationSource: src}
+	if cur := currentReplication(b); cur != nil && cur.AsReplicationDestination != nil && len(cur.AsReplicationDestination.SourceToDestinationKeyMapping) > 0 {
+		rc.AsReplicationDestination = cur.AsReplicationDestination
+	}
+	return rc
+}
+
+// withDestination returns b's replication configuration with its key
+// mapping replaced by mapping (empty removes the destination side).
+func withDestination(b *b2.Bucket, mapping map[string]string) *b2.ReplicationConfiguration {
+	rc := &b2.ReplicationConfiguration{}
+	if len(mapping) > 0 {
+		rc.AsReplicationDestination = &b2.ReplicationDestination{SourceToDestinationKeyMapping: mapping}
+	}
+	if cur := currentReplication(b); cur != nil && cur.AsReplicationSource != nil && len(cur.AsReplicationSource.ReplicationRules) > 0 {
+		rc.AsReplicationSource = cur.AsReplicationSource
+	}
+	return rc
+}
+
+func currentReplication(b *b2.Bucket) *b2.ReplicationConfiguration {
+	if b == nil || b.ReplicationConfiguration == nil {
+		return nil
+	}
+	return b.ReplicationConfiguration.Value
 }
 
 func replicationSourceEqual(current, want *b2.ReplicationSource) bool {

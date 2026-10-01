@@ -170,6 +170,8 @@ spec:
                           - bypassGovernance
                           - readBucketLogging
                           - writeBucketLogging
+                          - readBucketReplications
+                          - writeBucketReplications
                           type: string
                         type: array
                         x-kubernetes-list-type: set
