@@ -106,6 +106,9 @@ func runSuite(m *testing.M) int {
 
 	fakeB2 = b2fake.New()
 	defer fakeB2.Close()
+	// Retained buckets accumulate when the suite is run repeatedly
+	// (-count=N) against one fake; lift B2's 100-bucket limit here.
+	fakeB2.MaxBuckets = 100000
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme,

@@ -193,7 +193,6 @@ func TestKeyDoesNotOverwriteUnownedSecret(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "precious", Namespace: ns},
 		StringData: map[string]string{"password": "hunter2"},
 	})).To(Succeed())
-	before := len(fakeB2.Keys())
 
 	key := newKey(ns, "app", "conflict", "readFiles")
 	key.Spec.SecretName = "precious"
@@ -201,7 +200,18 @@ func TestKeyDoesNotOverwriteUnownedSecret(t *testing.T) {
 	eventuallyReason(g, key, keyConds(key), b2v1.ReasonSecretConflict)
 
 	g.Expect(string(getSecret(g, ns, "precious").Data["password"])).To(Equal("hunter2"))
-	g.Expect(fakeB2.Keys()).To(HaveLen(before), "no key may be created for a conflicting Secret")
+	// No key may be created for a conflicting Secret. (Compare by owner, not
+	// by count: other tests' keys rotate concurrently.)
+	prefix := KeyNamePrefix + "-" + testClusterID + "-" + uid8(key.UID) + "-"
+	g.Consistently(func() []string {
+		var ours []string
+		for _, k := range fakeB2.Keys() {
+			if strings.HasPrefix(k.KeyName, prefix) {
+				ours = append(ours, k.KeyName)
+			}
+		}
+		return ours
+	}, 2*time.Second, poll).Should(BeEmpty(), "no key may be created for a conflicting Secret")
 
 	// Deleting the key must not delete the Secret it never owned.
 	g.Expect(k8s.Delete(ctx, key)).To(Succeed())

@@ -404,6 +404,19 @@ func (r *BucketReconciler) finalize(ctx context.Context, bkt *b2v1.Bucket) (ctrl
 			return fail(waitFor(b2v1.ReasonDeletionBlocked, time.Minute,
 				"%d Bucket(s) replicate into this bucket (e.g. %s); remove their replication rules first", n, sources.Items[0].Name))
 		}
+		// A source whose rule was just removed may still be revoking its
+		// key for this bucket; wait until its status no longer lists it.
+		var peers b2v1.BucketList
+		if err := r.Client.List(ctx, &peers, client.InNamespace(bkt.Namespace)); err != nil {
+			return ctrl.Result{}, err
+		}
+		for _, p := range peers.Items {
+			if p.Status.Replication != nil && slices.ContainsFunc(p.Status.Replication.Destinations,
+				func(d b2v1.ReplicationDestinationStatus) bool { return d.BucketID == observed.BucketID }) {
+				return fail(waitFor(b2v1.ReasonDeletionBlocked, 30*time.Second,
+					"Bucket %s is still removing its replication into this bucket", p.Name))
+			}
+		}
 		// Stop replicating from this bucket and revoke its replication keys.
 		teardown := bkt.DeepCopy()
 		teardown.Spec.Replication = nil
@@ -610,7 +623,7 @@ func (r *BucketReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(readinessChanged())).
 		Watches(&b2v1.B2AccessPolicy{}, handler.EnqueueRequestsFromMapFunc(r.allBuckets)).
 		Watches(&b2v1.Bucket{}, handler.EnqueueRequestsFromMapFunc(r.replicationPeers),
-			builder.WithPredicates(predicate.Or[client.Object](specOrDeletionChanged(), bucketReadinessChanged()))).
+			builder.WithPredicates(predicate.Or[client.Object](specOrDeletionChanged(), bucketReadinessChanged(), replicationStatusChanged()))).
 		Watches(&b2v1.ApplicationKey{}, handler.EnqueueRequestsFromMapFunc(referencedBucket),
 			builder.WithPredicates(predicate.Funcs{
 				CreateFunc: func(event.CreateEvent) bool { return false },
@@ -644,6 +657,11 @@ func (r *BucketReconciler) replicationPeers(ctx context.Context, o client.Object
 	var out []reconcile.Request
 	for _, rule := range bkt.Spec.Replication {
 		out = append(out, reconcile.Request{NamespacedName: client.ObjectKey{Namespace: bkt.Namespace, Name: rule.DestinationBucketRef.Name}})
+	}
+	if rs := bkt.Status.Replication; rs != nil {
+		for _, d := range rs.Destinations {
+			out = append(out, reconcile.Request{NamespacedName: client.ObjectKey{Namespace: bkt.Namespace, Name: d.Bucket}})
+		}
 	}
 	return append(out, r.listRequests(ctx, client.InNamespace(bkt.Namespace), client.MatchingFields{indexReplicationDest: bkt.Name})...)
 }
@@ -683,6 +701,20 @@ func specOrDeletionChanged() predicate.Predicate {
 			return !e.ObjectNew.GetDeletionTimestamp().IsZero()
 		}},
 	)
+}
+
+// replicationStatusChanged passes Bucket updates that change the replication
+// a source has in place, which destination buckets may be waiting on.
+func replicationStatusChanged() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(event.CreateEvent) bool { return false },
+		DeleteFunc: func(event.DeleteEvent) bool { return true },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			o, ok1 := e.ObjectOld.(*b2v1.Bucket)
+			n, ok2 := e.ObjectNew.(*b2v1.Bucket)
+			return !ok1 || !ok2 || !reflect.DeepEqual(o.Status.Replication, n.Status.Replication)
+		},
+	}
 }
 
 // readinessChanged passes provider config events that change readiness.

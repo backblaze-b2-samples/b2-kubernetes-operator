@@ -98,6 +98,8 @@ type Server struct {
 	MasterKey   string
 	// S3APIURL is returned as apiInfo.storageApi.s3ApiUrl.
 	S3APIURL string
+	// MaxBuckets is the per-account bucket limit (B2's is 100).
+	MaxBuckets int
 
 	ts  *httptest.Server
 	url string
@@ -131,6 +133,7 @@ func newServer() *Server {
 	s := &Server{
 		AccountID:     "fakeaccount01",
 		S3APIURL:      "https://s3.us-west-004.backblazeb2.com",
+		MaxBuckets:    100,
 		now:           time.Now,
 		accounts:      map[string]*account{},
 		groups:        map[string]*group{},
@@ -511,7 +514,13 @@ func (s *Server) createBucket(caller *key, body map[string]json.RawMessage) (any
 			return nil, &Fault{Status: 400, Code: b2.CodeDuplicateBucketName, Message: "Bucket name is already in use."}
 		}
 	}
-	if len(s.buckets) >= 100 {
+	owned := 0
+	for _, b := range s.buckets {
+		if b.AccountID == caller.AccountID {
+			owned++
+		}
+	}
+	if owned >= s.MaxBuckets {
 		return nil, &Fault{Status: 400, Code: b2.CodeTooManyBuckets, Message: "too many buckets"}
 	}
 	if f := validateBucketType(req.BucketType); f != nil {

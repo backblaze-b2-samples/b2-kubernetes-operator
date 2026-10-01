@@ -150,6 +150,9 @@ func (r *BucketReconciler) reconcileReplication(ctx context.Context, acct *provi
 			continue
 		}
 		if err := r.removeDestination(ctx, st.SourceKeyID, old); err != nil {
+			if b2.HasCode(err, b2.CodeConflict) {
+				return nil, waitFor(b2v1.ReasonReconciling, time.Second, "destination bucket changed concurrently")
+			}
 			return nil, providerError(fmt.Sprintf("removing replication to Bucket %q", old.Bucket), err)
 		}
 	}

@@ -217,6 +217,22 @@ func TestDuplicateBucketName(t *testing.T) {
 	}
 }
 
+func TestBucketLimitPerAccount(t *testing.T) {
+	srv := startFake(t)
+	srv.MaxBuckets = 2
+	c := newClient(t, srv)
+	ctx := context.Background()
+	for _, n := range []string{"limit-one", "limit-two"} {
+		if _, err := c.CreateBucket(ctx, b2.CreateBucketRequest{BucketName: n, BucketType: b2.BucketTypeAllPrivate}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := c.CreateBucket(ctx, b2.CreateBucketRequest{BucketName: "limit-three", BucketType: b2.BucketTypeAllPrivate})
+	if !b2.HasCode(err, b2.CodeTooManyBuckets) {
+		t.Fatalf("err = %v, want too_many_buckets", err)
+	}
+}
+
 func TestKeys(t *testing.T) {
 	srv := startFake(t)
 	c := newClient(t, srv)

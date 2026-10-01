@@ -353,6 +353,11 @@ func TestCrossAccountReplication(t *testing.T) {
 	g.Eventually(func() bool {
 		return apierrors.IsNotFound(k8s.Get(ctx, client.ObjectKeyFromObject(dst), &b2v1.Bucket{}))
 	}, timeout, poll).Should(BeTrue())
+	// The retained destination was released only after the source's key
+	// mapping was removed from it.
+	if released := fakeB2.Bucket(dst.Spec.BucketName).ReplicationConfiguration.Value.AsReplicationDestination; released != nil {
+		g.Expect(released.SourceToDestinationKeyMapping).NotTo(HaveKey(srcKey))
+	}
 }
 
 func TestReplicationNeedsPolicy(t *testing.T) {
