@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 (2026-10-02)
+
+First release: an open-source sample, not officially supported by Backblaze. The API is `v1alpha1` and may change in later releases.
 
 ### Added
 - `ClusterProviderConfig` for per-account credentials, validated against B2 with account details in status.

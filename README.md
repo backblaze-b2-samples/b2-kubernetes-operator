@@ -44,11 +44,10 @@ The operator creates the key in B2, restricted to one bucket and prefix. It deli
 Prerequisites: Kubernetes 1.30+, Helm 3, and a B2 application key for the operator (see [Operator key](#operator-key)).
 
 ```sh
-# 1. Install the operator (CRDs are installed by the chart). Releases publish
-#    the chart to oci://ghcr.io/backblaze-b2-samples/charts/b2-kubernetes-operator;
-#    from a checkout:
-helm install b2-operator charts/b2-kubernetes-operator \
-  --namespace b2-operator-system --create-namespace
+# 1. Install the operator (CRDs are installed by the chart). To install from a
+#    checkout instead, use charts/b2-kubernetes-operator as the chart.
+helm install b2-operator oci://ghcr.io/backblaze-b2-samples/charts/b2-kubernetes-operator \
+  --version 0.1.0 --namespace b2-operator-system --create-namespace
 
 # 2. Give it credentials for your B2 account.
 kubectl -n b2-operator-system create secret generic b2-credentials \
