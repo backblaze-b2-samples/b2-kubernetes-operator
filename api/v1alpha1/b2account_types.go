@@ -49,7 +49,7 @@ const (
 	AccountSecretS3Endpoint = "s3Endpoint"
 	AccountSecretGroupID    = "groupId"
 	// The operator's own application key in the account, used for all
-	// bucket and key management instead of the master key.
+	// bucket and key management instead of the key B2 returned at creation.
 	AccountSecretOperationsKeyID = "operationsKeyId"
 	AccountSecretOperationsKey   = "operationsKey"
 )
@@ -145,7 +145,8 @@ type B2AccountStatus struct {
 	// +optional
 	S3Endpoint string `json:"s3Endpoint,omitempty"`
 	// OperationsKeyID is the application key the operator created in the
-	// account for day-to-day management; the master key is kept but unused.
+	// account for day-to-day management; the key B2 returned at creation is
+	// kept but unused.
 	// +optional
 	OperationsKeyID string `json:"operationsKeyID,omitempty"`
 	// ProviderConfigName is the ClusterProviderConfig created for the account.

@@ -91,7 +91,12 @@ func TestPartnerAPINotEnabled(t *testing.T) {
 	acct := newAccount(c, c, "us-west")
 	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
 	eventuallyReason(g, acct, b2v1.ReasonReconciled)
-	pc := partnerConfigFor(c+"-as-partner", "b2-account-"+c)
+	id := acct.Status.AccountID
+	g.Expect(k8s.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: operatorNS, Name: c + "-master"},
+		StringData: map[string]string{"applicationKeyId": id, "applicationKey": fakeB2.AccountMasterKey(id)},
+	})).To(Succeed())
+	pc := partnerConfigFor(c+"-as-partner", c+"-master")
 	g.Expect(k8s.Create(ctx, pc)).To(Succeed())
 	eventuallyReason(g, pc, b2v1.ReasonPartnerAPINotEnabled)
 	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeMaster))

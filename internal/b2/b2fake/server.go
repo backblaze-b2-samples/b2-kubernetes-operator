@@ -316,6 +316,18 @@ func (s *Server) Key(id string) *b2.ApplicationKey {
 	return &out
 }
 
+// AccountMasterKey returns the secret of an account's master key, whose ID is
+// the account ID. B2 never hands it out; tests use it to stand in for a
+// customer who supplies their own master key.
+func (s *Server) AccountMasterKey(accountID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if k, ok := s.keys[accountID]; ok && k.master {
+		return k.secret
+	}
+	return ""
+}
+
 // Keys returns copies of all non-master keys.
 func (s *Server) Keys() []b2.ApplicationKey {
 	s.mu.Lock()
@@ -1084,14 +1096,14 @@ func (s *Server) createGroupMember(caller *key, body map[string]json.RawMessage)
 	if len(g.members) >= 5000 {
 		return nil, &Fault{Status: 401, Code: "too_many_members", Message: "group is full"}
 	}
-	// Modelled as the new account's master key (key ID == account ID). The
-	// operator does not rely on this: it only needs writeKeys on the key.
+	// Like B2, return an all-capabilities application key; the new account's
+	// master key is never handed out.
 	id := s.newID("acct")
-	keyID, secret := id, "K005"+randB64(22)
 	regionCode := map[string]string{"us-east": "us-east-005", "us-west": "us-west-004", "ca-east": "ca-east-006", "eu-central": "eu-central-003"}[req.Region]
-	s.addAccountLocked(id, req.MemberEmail, req.Region, "https://s3."+regionCode+".backblazeb2.com", keyID, secret)
+	s.addAccountLocked(id, req.MemberEmail, req.Region, "https://s3."+regionCode+".backblazeb2.com", id, "K005"+randB64(22))
+	k := s.newKeyLocked(id, "partner", AllCapabilities, nil, "", nil)
 	g.members = append(g.members, id)
-	return b2.CreateGroupMemberResponse{ApplicationKeyID: keyID, ApplicationKey: secret, GroupMember: s.member(g, id)}, nil
+	return b2.CreateGroupMemberResponse{ApplicationKeyID: k.ApplicationKeyID, ApplicationKey: k.secret, GroupMember: s.member(g, id)}, nil
 }
 
 func (s *Server) ejectGroupMember(caller *key, body map[string]json.RawMessage) (any, *Fault) {

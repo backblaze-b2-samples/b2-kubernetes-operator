@@ -18,7 +18,7 @@ make test-live
 | `TestLiveObjectLock` | Object Lock and default retention are enabled, changed and cleared. B2's representation of "no retention" is recognised as in sync. |
 | `TestLiveApplicationKeyLifecycle` | Delivered keys authorize with exactly the requested bucket, prefix, capabilities and expiry. Rotation keeps the old key valid for the grace period, then revokes it. Deletion revokes. Also records how `b2_delete_key` answers for a key that no longer exists. |
 | `TestLiveReplication` | Replication rules, the source key and the destination key mapping are set up, then cleared and revoked when the rule is removed. Skipped if the account cannot use Cloud Replication (it needs a verified email and payment history). |
-| `TestLivePartnerAccount` | A real Partner API account is created, managed through an operator application key, holds a bucket, and is optionally ejected. Off unless enabled (see below). Also records whether `b2_create_group_member` returns the account's master key. |
+| `TestLivePartnerAccount` | A real Partner API account is created, managed through an operator application key, holds a bucket, and is optionally ejected. Off unless enabled (see below). Also records which kind of key `b2_create_group_member` returns. |
 
 After resources become ready, most tests resync twice and assert that the bucket's revision in B2 did not change. If the operator's idea of a setting differed from how B2 reports it, it would rewrite the bucket on every resync, and this catches it.
 
@@ -39,6 +39,8 @@ These were checked against the live API (October 2026). Where they differ from t
 | Default encryption turned off | Reported as `{"mode": null, "algorithm": null}`. |
 | Object Lock default retention cleared | Reported as `{"mode": null, "period": null}`. |
 | `b2_delete_key` for a key that no longer exists | Succeeds. |
+| Key returned by `b2_create_group_member` | An application key with all capabilities (its ID differs from the account ID), not the account's master key. |
+| `b2_create_group_member` with a `backblaze.com` email | `420 method_failure` ("Failure creating account … Please try again"); no account is created, and retrying does not help. |
 
 ## Credentials
 

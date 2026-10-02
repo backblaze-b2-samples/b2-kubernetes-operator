@@ -84,7 +84,7 @@ func TestB2AccountProvisionsAccountAndStoresKey(t *testing.T) {
 	g.Expect(auth.AccountID).To(Equal(acct.Status.AccountID))
 
 	// Management uses an application key created in the account; the
-	// master key B2 returned is stored but not used for it.
+	// key B2 returned at creation is stored but not used for it.
 	g.Expect(acct.Status.OperationsKeyID).NotTo(BeEmpty())
 	g.Expect(string(s.Data[b2v1.AccountSecretOperationsKeyID])).To(Equal(acct.Status.OperationsKeyID))
 	opsKey := fakeB2.Key(acct.Status.OperationsKeyID)
