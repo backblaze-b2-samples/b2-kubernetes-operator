@@ -240,23 +240,7 @@ func TestLiveReplication(t *testing.T) {
 		deleteBucket(NewWithT(t), east)
 	})
 
-	// Cloud Replication needs a verified email and payment history; an
-	// account without them cannot run this test.
-	notEligible := func(c *metav1.Condition) bool {
-		return c != nil && (strings.Contains(c.Message, b2.CodeNoPaymentHistory) || strings.Contains(c.Message, b2.CodeEmailNotVerified))
-	}
-	for _, b := range []*b2v1.Bucket{west, east} {
-		var cond *metav1.Condition
-		g.Eventually(func(g Gomega) {
-			g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(b), b)).To(Succeed())
-			cond = meta.FindStatusCondition(b.Status.Conditions, b2v1.ConditionReady)
-			g.Expect(cond).NotTo(BeNil())
-			g.Expect(cond.Status == metav1.ConditionTrue || notEligible(cond)).To(BeTrue(), "%s: reason %s: %s", b.Name, cond.Reason, cond.Message)
-		}, timeout, poll).Should(Succeed())
-		if notEligible(cond) {
-			t.Skipf("account cannot use Cloud Replication: %s", cond.Message)
-		}
-	}
+	waitReplicating(t, g, west, east)
 
 	replication := func(b *b2v1.Bucket) *b2.ReplicationConfiguration {
 		rc := b2Bucket(g, b.Spec.BucketName).ReplicationConfiguration
@@ -303,6 +287,28 @@ func TestLiveReplication(t *testing.T) {
 	expectStable(g, east)
 }
 
+// waitReplicating waits for buckets with replication to become ready, and
+// skips the test if the account cannot use Cloud Replication, which needs a
+// verified email and payment history.
+func waitReplicating(t *testing.T, g *WithT, buckets ...*b2v1.Bucket) {
+	t.Helper()
+	notEligible := func(c *metav1.Condition) bool {
+		return c != nil && (strings.Contains(c.Message, b2.CodeNoPaymentHistory) || strings.Contains(c.Message, b2.CodeEmailNotVerified))
+	}
+	for _, b := range buckets {
+		var cond *metav1.Condition
+		g.Eventually(func(g Gomega) {
+			g.Expect(k8s.Get(context.Background(), client.ObjectKeyFromObject(b), b)).To(Succeed())
+			cond = meta.FindStatusCondition(b.Status.Conditions, b2v1.ConditionReady)
+			g.Expect(cond).NotTo(BeNil())
+			g.Expect(cond.Status == metav1.ConditionTrue || notEligible(cond)).To(BeTrue(), "%s: reason %s: %s", b.Name, cond.Reason, cond.Message)
+		}, timeout, poll).Should(Succeed())
+		if notEligible(cond) {
+			t.Skipf("account cannot use Cloud Replication: %s", cond.Message)
+		}
+	}
+}
+
 func describe(rc *b2.ReplicationConfiguration) string {
 	out := "none"
 	if rc.AsReplicationSource != nil {
@@ -312,100 +318,6 @@ func describe(rc *b2.ReplicationConfiguration) string {
 		out += fmt.Sprintf(" destination(%d mappings)", len(rc.AsReplicationDestination.SourceToDestinationKeyMapping))
 	}
 	return out
-}
-
-// TestLivePartnerAccount creates a real B2 account in a Partner API Group.
-// Accounts cannot be deleted, so it only runs when explicitly enabled.
-func TestLivePartnerAccount(t *testing.T) {
-	g := requireLive(t)
-	if env("B2_LIVE_PARTNER_CREATE_ACCOUNTS") != "yes" {
-		t.Skip("set B2_LIVE_PARTNER_CREATE_ACCOUNTS=yes (and the other B2_LIVE_PARTNER_* variables) to create a real Partner API account")
-	}
-	for _, v := range []string{"B2_LIVE_PARTNER_KEY_ID", "B2_LIVE_PARTNER_KEY", "B2_LIVE_PARTNER_GROUP_ID", "B2_LIVE_PARTNER_EMAIL_DOMAIN"} {
-		if env(v) == "" {
-			t.Fatalf("%s is required for the Partner API test", v)
-		}
-	}
-	ctx := context.Background()
-	region := b2v1.Region(env("B2_LIVE_PARTNER_REGION"))
-	if region == "" {
-		region = "us-west"
-	}
-	g.Expect(k8s.Create(ctx, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: operatorNS, Name: "b2-partner-admin"},
-		StringData: map[string]string{"applicationKeyId": env("B2_LIVE_PARTNER_KEY_ID"), "applicationKey": env("B2_LIVE_PARTNER_KEY")},
-	})).To(Succeed())
-	partner := &b2v1.ClusterProviderConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "partner"},
-		Spec: b2v1.ClusterProviderConfigSpec{
-			APIURL:               env("B2_LIVE_API_URL"),
-			CredentialsSecretRef: b2v1.CredentialsSecretReference{Namespace: operatorNS, Name: "b2-partner-admin"},
-			Partner: &b2v1.PartnerSettings{
-				GroupID:             env("B2_LIVE_PARTNER_GROUP_ID"),
-				MemberEmailTemplate: "{customer}-{region}@" + env("B2_LIVE_PARTNER_EMAIL_DOMAIN"),
-			},
-		},
-	}
-	g.Expect(k8s.Create(ctx, partner)).To(Succeed())
-	waitReady(g, partner, func() []metav1.Condition { return partner.Status.Conditions })
-	g.Expect(partner.Status.KeyType).To(Equal(b2v1.KeyTypeMaster))
-
-	deletion := b2v1.AccountDeletionPolicyRetain
-	if env("B2_LIVE_PARTNER_EJECT") == "yes" {
-		deletion = b2v1.AccountDeletionPolicyEject
-	}
-	acct := &b2v1.B2Account{
-		ObjectMeta: metav1.ObjectMeta{Name: runID},
-		Spec: b2v1.B2AccountSpec{
-			PartnerConfigRef:     b2v1.ProviderConfigReference{Name: "partner"},
-			Customer:             runID,
-			Region:               region,
-			CredentialsSecretRef: b2v1.AccountSecretReference{Namespace: operatorNS},
-			DeletionPolicy:       deletion,
-		},
-	}
-	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
-	waitReady(g, acct, func() []metav1.Condition { return acct.Status.Conditions })
-	t.Logf("created account %s (%s) in %s; it remains in the Group or, with eject, as an independent account", acct.Status.AccountID, acct.Status.Email, region)
-
-	admin := b2.New(b2.Options{BaseURL: env("B2_LIVE_API_URL"), ApplicationKeyID: env("B2_LIVE_PARTNER_KEY_ID"), ApplicationKey: env("B2_LIVE_PARTNER_KEY")})
-	member, err := admin.FindGroupMember(ctx, env("B2_LIVE_PARTNER_GROUP_ID"), acct.Status.Email)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(member).NotTo(BeNil())
-	g.Expect(member.AccountID).To(Equal(acct.Status.AccountID))
-
-	// What b2_create_group_member returned, which the docs do not specify.
-	creds := &corev1.Secret{}
-	g.Expect(k8s.Get(ctx, client.ObjectKey{Namespace: operatorNS, Name: acct.SecretNameOrDefault()}, creds)).To(Succeed())
-	returned := string(creds.Data[b2v1.AccountSecretKeyID])
-	t.Logf("b2_create_group_member returned the account's master key: %v (key ID %s, account %s)", b2.IsMasterKey(returned, acct.Status.AccountID), returned, acct.Status.AccountID)
-
-	// The account's provider config runs on the operator's application key.
-	pc := &b2v1.ClusterProviderConfig{ObjectMeta: metav1.ObjectMeta{Name: acct.ProviderConfigNameOrDefault()}}
-	waitReady(g, pc, func() []metav1.Condition { return pc.Status.Conditions })
-	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeApplication))
-	g.Expect(pc.Status.AccountID).To(Equal(acct.Status.AccountID))
-
-	// A bucket lands in the customer's account.
-	b := newBucket("partner-bucket", "partner")
-	b.Spec.ProviderConfigRef.Name = pc.Name
-	g.Expect(k8s.Create(ctx, b)).To(Succeed())
-	waitReady(g, b, bucketConds(b))
-	ops := b2.New(b2.Options{BaseURL: env("B2_LIVE_API_URL"),
-		ApplicationKeyID: string(creds.Data[b2v1.AccountSecretOperationsKeyID]), ApplicationKey: string(creds.Data[b2v1.AccountSecretOperationsKey])})
-	inMember, err := ops.GetBucketByName(ctx, b.Spec.BucketName)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(inMember).NotTo(BeNil(), "bucket not found in the customer account")
-
-	g.Expect(k8s.Delete(ctx, b)).To(Succeed())
-	waitGone(g, b)
-	g.Expect(k8s.Delete(ctx, acct)).To(Succeed())
-	waitGone(g, acct)
-	if deletion == b2v1.AccountDeletionPolicyEject {
-		member, err := admin.FindGroupMember(ctx, env("B2_LIVE_PARTNER_GROUP_ID"), acct.Status.Email)
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(member).To(BeNil(), "account still in the Group after eject")
-	}
 }
 
 // authorize authorizes with the credentials in a key Secret.

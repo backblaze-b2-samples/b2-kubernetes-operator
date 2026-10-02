@@ -87,7 +87,7 @@ test-e2e: e2e-setup ## Run end-to-end tests against a kind cluster.
 .PHONY: test-live
 test-live: setup-envtest ## Run controllers against the real B2 API (needs B2_LIVE_* credentials; see test/live/README.md).
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
-		go test -tags live -count=1 -timeout 45m -v ./test/live/...
+		go test -tags live -count=1 -timeout 45m -v $(GOTESTFLAGS) ./test/live/...
 
 .PHONY: e2e-teardown
 e2e-teardown: ## Delete the e2e kind cluster.

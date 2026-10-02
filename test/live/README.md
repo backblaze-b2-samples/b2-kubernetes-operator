@@ -18,7 +18,8 @@ make test-live
 | `TestLiveObjectLock` | Object Lock and default retention are enabled, changed and cleared. B2's representation of "no retention" is recognised as in sync. |
 | `TestLiveApplicationKeyLifecycle` | Delivered keys authorize with exactly the requested bucket, prefix, capabilities and expiry. Rotation keeps the old key valid for the grace period, then revokes it. Deletion revokes. Also records how `b2_delete_key` answers for a key that no longer exists. |
 | `TestLiveReplication` | Replication rules, the source key and the destination key mapping are set up, then cleared and revoked when the rule is removed. Skipped if the account cannot use Cloud Replication (it needs a verified email and payment history). |
-| `TestLivePartnerAccount` | A real Partner API account is created, managed through an operator application key, holds a bucket, and is optionally ejected. Off unless enabled (see below). Also records which kind of key `b2_create_group_member` returns. |
+| `TestLivePartnerAccount` | A real Partner API account is created, managed through an operator application key, and holds a bucket. With eject, the account leaves the Group, the operations key is revoked, and the stored account key still works. Off unless enabled (see below). Also records which kind of key `b2_create_group_member` returns. |
+| `TestLivePartnerMultiRegion` | A multi-region bucket: one account per region (us-west, us-east), a bucket in each, and Cloud Replication from west to east across the two accounts. A file written in us-west must arrive in us-east (`B2_LIVE_REPLICATION_WAIT`, default 15m). Off unless enabled. |
 
 After resources become ready, most tests resync twice and assert that the bucket's revision in B2 did not change. If the operator's idea of a setting differed from how B2 reports it, it would rewrite the bucket on every resync, and this catches it.
 
@@ -70,23 +71,25 @@ b2 key create b2-operator-live-tests listBuckets,readBuckets,writeBuckets,delete
 
 The cost is a few hundred API transactions per run.
 
-## Partner API test
+## Partner API tests
 
-This creates a **real B2 account in your Group, which cannot be deleted**. It only runs with every variable below set:
+These create **real B2 accounts in your Group, which cannot be deleted**: one for `TestLivePartnerAccount` and two for `TestLivePartnerMultiRegion`, every run. Use a Group set aside for testing, not one holding customers. They only run with every variable below set:
 
 ```sh
 export B2_LIVE_PARTNER_CREATE_ACCOUNTS=yes
 export B2_LIVE_PARTNER_KEY_ID=...          # Group admin's MASTER key ID (equals its account ID)
 export B2_LIVE_PARTNER_KEY=...
 export B2_LIVE_PARTNER_GROUP_ID=...
-export B2_LIVE_PARTNER_EMAIL_DOMAIN=...    # e.g. a test domain you control
+export B2_LIVE_PARTNER_EMAIL_DOMAIN=...    # a domain you own; B2 refuses backblaze.com
 export B2_LIVE_PARTNER_REGION=us-west      # optional
 export B2_LIVE_PARTNER_EJECT=yes           # optional: eject the account at the end
 ```
 
-The account email is `b2op-live-<random>-<region>@<domain>`. Without `B2_LIVE_PARTNER_EJECT=yes` the account stays in the Group.
+Account emails are `b2op-live-<random>[-mr]-<region>@<domain>`. Without `B2_LIVE_PARTNER_EJECT=yes` the `TestLivePartnerAccount` account stays in the Group; the multi-region accounts always do. Buckets and files are removed either way.
+
+To run only these: `make test-live GOTESTFLAGS='-run TestLivePartner'`, or `go test -tags live -run TestLivePartner -v ./test/live/...` with `KUBEBUILDER_ASSETS` set to an absolute path.
 
 ## Other settings
 
 - `B2_LIVE_API_URL` overrides the authorization endpoint.
-- To dry-run the suite itself without B2, point it at the fake: `go run ./cmd/b2fake --listen 127.0.0.1:18080 --advertise-url http://127.0.0.1:18080 --master-key-id acct --master-key key --group-id grp`, then set `B2_LIVE_API_URL=http://127.0.0.1:18080` and use `acct`/`key`/`grp` as the credentials.
+- To dry-run the suite itself without B2, point it at the fake: `go run ./cmd/b2fake --listen 127.0.0.1:18080 --advertise-url http://127.0.0.1:18080 --master-key-id acct --master-key key --group-id grp`, then set `B2_LIVE_API_URL=http://127.0.0.1:18080` and use `acct`/`key`/`grp` as the credentials. The fake has no file API, so `TestLivePartnerMultiRegion` stops at the upload.
