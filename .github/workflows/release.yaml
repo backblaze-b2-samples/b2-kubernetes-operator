@@ -47,7 +47,7 @@ jobs:
       - name: Sign image
         run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Package and push chart
         run: |
           version="${GITHUB_REF_NAME#v}"
