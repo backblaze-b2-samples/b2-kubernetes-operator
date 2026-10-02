@@ -25,7 +25,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -39,7 +38,8 @@ import (
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/provider"
 )
 
-// operatorCapabilities are what the operator key needs for full function.
+// operatorCapabilities are what the operator's key needs for full function.
+// Their absence is reported but does not make the config unusable.
 var operatorCapabilities = []string{
 	"listBuckets", "writeBuckets", "deleteBuckets", "listKeys", "writeKeys", "deleteKeys",
 	"readBucketEncryption", "writeBucketEncryption", "readBucketRetentions", "writeBucketRetentions",
@@ -47,8 +47,8 @@ var operatorCapabilities = []string{
 }
 
 // ClusterProviderConfigReconciler validates B2 credentials and publishes the
-// account's details in status. It re-validates every ResyncPeriod, which also
-// picks up rotated credentials.
+// account's details in status. It re-validates every ResyncPeriod, which
+// also picks up rotated credentials.
 type ClusterProviderConfigReconciler struct {
 	Deps
 }
@@ -61,38 +61,31 @@ type ClusterProviderConfigReconciler struct {
 func (r *ClusterProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var pc b2v1.ClusterProviderConfig
 	if err := r.Client.Get(ctx, req.NamespacedName, &pc); err != nil {
-		if apierrors.IsNotFound(err) {
-			r.Registry.Forget(req.Name)
-			return ctrl.Result{}, nil
+		if client.IgnoreNotFound(err) == nil {
+			r.Accounts.Forget(req.Name)
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	orig := pc.DeepCopy()
 	res, err := r.reconcile(ctx, &pc)
 	pc.Status.ObservedGeneration = pc.Generation
-	if perr := patchStatus(ctx, r.Client, &pc, orig); perr != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(perr)
-	}
-	return res, err
+	return r.commitStatus(ctx, &pc, orig, res, err)
 }
 
 func (r *ClusterProviderConfigReconciler) reconcile(ctx context.Context, pc *b2v1.ClusterProviderConfig) (ctrl.Result, error) {
-	setReady := func(reason, msg string) {
-		setCondition(&pc.Status.Conditions, pc.Generation, metav1.ConditionFalse, reason, msg)
-	}
-	acct, err := r.Registry.Refresh(ctx, pc)
+	notReady := r.notReady(pc)
+	acct, err := r.Accounts.Refresh(ctx, pc)
 	if err != nil {
 		var credErr *b2.CredentialsError
 		switch {
 		case errors.Is(err, provider.ErrSecretNotFound):
-			return result(waitFor(b2v1.ReasonCredentialsNotFound, time.Minute, "%v", err), setReady)
+			return result(waitFor(b2v1.ReasonCredentialsSecretNotFound, time.Minute, "%v", err), notReady)
 		case errors.As(err, &credErr):
-			r.Recorder.Eventf(pc, nil, corev1.EventTypeWarning, b2v1.ReasonInvalidCredentials, "Authorize", "B2 rejected the credentials: %v", credErr.Err)
-			return result(waitFor(b2v1.ReasonInvalidCredentials, 5*time.Minute, "B2 rejected the credentials: %v", credErr.Err), setReady)
+			return result(waitFor(b2v1.ReasonInvalidCredentials, 5*time.Minute, "B2 rejected the credentials: %v", credErr.Err), notReady)
 		case errors.Is(err, provider.ErrInvalidAPIURL):
-			return result(waitFor(b2v1.ReasonInvalidSpec, 10*time.Minute, "%v", err), setReady)
+			return result(waitFor(b2v1.ReasonInvalidSpec, 10*time.Minute, "%v", err), notReady)
 		default:
-			return result(providerError("authorizing with B2", err), setReady)
+			return result(providerError("authorizing with B2", err), notReady)
 		}
 	}
 
@@ -102,46 +95,57 @@ func (r *ClusterProviderConfigReconciler) reconcile(ctx context.Context, pc *b2v
 	pc.Status.S3Region = acct.S3Region
 	pc.Status.Capabilities = slices.Sorted(slices.Values(acct.Capabilities))
 	pc.Status.LastAuthorizedTime = &now
-	pc.Status.KeyExpiresAt = nil
-	if acct.KeyExpirationMillis != nil {
-		t := metav1.NewTime(time.UnixMilli(*acct.KeyExpirationMillis))
-		pc.Status.KeyExpiresAt = &t
-	}
-
+	pc.Status.KeyExpiresAt = millisTime(acct.KeyExpirationMillis)
 	pc.Status.KeyType = b2v1.KeyTypeApplication
 	if acct.MasterKey {
 		pc.Status.KeyType = b2v1.KeyTypeMaster
 	}
-	if pc.Spec.Partner != nil && !acct.MasterKey {
-		return result(waitFor(b2v1.ReasonPartnerNeedsMasterKey, 10*time.Minute,
-			"the Partner API requires the Group admin account's master application key (its key ID equals the account ID %s); these credentials are an application key",
-			acct.AccountID), setReady)
-	}
-	if pc.Spec.Partner != nil && !acct.PartnerAPI {
-		return result(waitFor(b2v1.ReasonPartnerAPINotEnabled, 10*time.Minute,
-			"account %s is not enabled for the Backblaze Partner API; it is enabled by Backblaze sales for committed-contract customers, and the credentials must be the Group admin's master application key",
-			acct.AccountID), setReady)
-	}
 
-	msg := fmt.Sprintf("Authorized to B2 account %s", acct.AccountID)
-	var missing []string
-	for _, c := range operatorCapabilities {
-		if !slices.Contains(acct.Capabilities, c) {
-			missing = append(missing, c)
+	if pc.Spec.Partner != nil {
+		if se := checkPartnerAccess(acct); se != nil {
+			return result(se, notReady)
 		}
 	}
-	if len(missing) > 0 {
+	msg := fmt.Sprintf("Authorized to B2 account %s", acct.AccountID)
+	if missing := missingCapabilities(acct.Capabilities); len(missing) > 0 {
 		msg += fmt.Sprintf("; the key lacks %s, so some operations will fail", strings.Join(missing, ", "))
 	}
 	if pc.Spec.Partner == nil && acct.MasterKey {
 		msg += "; this is the account's master key, use a restricted application key instead"
 		if prev := meta.FindStatusCondition(pc.Status.Conditions, b2v1.ConditionReady); prev == nil || prev.Message != msg {
-			r.Recorder.Eventf(pc, nil, corev1.EventTypeWarning, "MasterKeyInUse", "Authorize",
+			r.Recorder.Eventf(pc, nil, corev1.EventTypeWarning, EventMasterKeyInUse, "Authorize",
 				"Bucket and key management is using the account's master key; create an application key with the capabilities the operator needs and use it instead")
 		}
 	}
-	setCondition(&pc.Status.Conditions, pc.Generation, metav1.ConditionTrue, b2v1.ReasonReconciled, msg)
+	markReady(pc, msg)
 	return ctrl.Result{RequeueAfter: r.Options.ResyncPeriod}, nil
+}
+
+// checkPartnerAccess checks that a partner config's credentials can use the
+// Partner API: the Group admin's master key (whose key ID equals the account
+// ID), on an account that sales has enabled.
+func checkPartnerAccess(acct *provider.Account) *stageError {
+	if !acct.MasterKey {
+		return waitFor(b2v1.ReasonPartnerRequiresMasterKey, 10*time.Minute,
+			"the Partner API requires the Group admin account's master application key (its key ID equals the account ID %s); these credentials are an application key",
+			acct.AccountID)
+	}
+	if !acct.PartnerAPI {
+		return waitFor(b2v1.ReasonPartnerAPINotEnabled, 10*time.Minute,
+			"account %s is not enabled for the Backblaze Partner API; it is enabled by Backblaze sales for committed-contract customers, and the credentials must be the Group admin's master application key",
+			acct.AccountID)
+	}
+	return nil
+}
+
+func missingCapabilities(have []string) []string {
+	var missing []string
+	for _, c := range operatorCapabilities {
+		if !slices.Contains(have, c) {
+			missing = append(missing, c)
+		}
+	}
+	return missing
 }
 
 // SetupWithManager registers the controller.

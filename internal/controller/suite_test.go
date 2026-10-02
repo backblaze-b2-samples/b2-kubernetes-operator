@@ -136,10 +136,11 @@ func runSuite(m *testing.M) int {
 	must(err)
 
 	deps := Deps{
-		Client:   mgr.GetClient(),
-		Registry: &provider.Registry{APIReader: mgr.GetAPIReader(), AllowInsecureAPIURL: true},
-		Policy:   &policy.Evaluator{Reader: mgr.GetClient()},
-		Recorder: mgr.GetEventRecorder("b2-operator"),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Accounts:  &provider.Registry{APIReader: mgr.GetAPIReader(), AllowInsecureAPIURL: true},
+		Policy:    &policy.Evaluator{Reader: mgr.GetClient()},
+		Recorder:  mgr.GetEventRecorder("b2-operator"),
 		Options: Options{
 			ResyncPeriod:            time.Hour,
 			KeyVerifyInterval:       testVerifyPeriod,
@@ -148,13 +149,13 @@ func runSuite(m *testing.M) int {
 			ClusterID:               testClusterID,
 		},
 	}
-	sweeper = &KeySweeper{Deps: deps, APIReader: mgr.GetAPIReader()}
+	sweeper = &KeySweeper{Deps: deps}
 	must((&ClusterProviderConfigReconciler{Deps: deps}).SetupWithManager(mgr))
 	must((&BucketReconciler{Deps: deps}).SetupWithManager(mgr))
 	remotes := &remote.Registry{APIReader: mgr.GetAPIReader()}
 	must((&RemoteClusterReconciler{Deps: deps, Remote: remotes}).SetupWithManager(mgr))
-	must((&ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader(), Remote: remotes}).SetupWithManager(mgr))
-	must((&B2AccountReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
+	must((&ApplicationKeyReconciler{Deps: deps, Remote: remotes}).SetupWithManager(mgr))
+	must((&B2AccountReconciler{Deps: deps}).SetupWithManager(mgr))
 
 	var cancel context.CancelFunc
 	testCtx, cancel = context.WithCancel(context.Background())
@@ -268,18 +269,21 @@ func createNamespace(t *testing.T, name string, labels map[string]string) string
 	return name
 }
 
-func readyCondition(g Gomega, obj client.Object, conds func() []metav1.Condition) *metav1.Condition {
+func readyCondition(g Gomega, obj conditioned) *metav1.Condition {
 	g.Expect(k8s.Get(context.Background(), client.ObjectKeyFromObject(obj), obj)).To(Succeed())
-	return meta.FindStatusCondition(conds(), b2v1.ConditionReady)
+	return meta.FindStatusCondition(*obj.GetConditions(), b2v1.ConditionReady)
 }
 
-// eventuallyReason waits until obj's Ready condition has the given reason.
-func eventuallyReason(g *WithT, obj client.Object, conds func() []metav1.Condition, reason string) {
+// eventuallyReason waits until obj's Ready condition has the given reason,
+// and returns the condition.
+func eventuallyReason(g *WithT, obj conditioned, reason string) *metav1.Condition {
+	var c *metav1.Condition
 	g.Eventually(func(g Gomega) {
-		c := readyCondition(g, obj, conds)
+		c = readyCondition(g, obj)
 		g.Expect(c).NotTo(BeNil())
 		g.Expect(c.Reason).To(Equal(reason), "message: %s", c.Message)
 	}, timeout, poll).Should(Succeed())
+	return c
 }
 
 // touch sets an annotation to force a reconcile.

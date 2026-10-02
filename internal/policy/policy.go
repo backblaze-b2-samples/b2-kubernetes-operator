@@ -86,6 +86,14 @@ type Evaluator struct {
 	AllowKeyManagement bool
 }
 
+// WithReader returns a copy of e that reads policies and namespaces from r,
+// e.g. directly from the API server to confirm a denial before acting on it.
+func (e *Evaluator) WithReader(r client.Reader) *Evaluator {
+	c := *e
+	c.Reader = r
+	return &c
+}
+
 // CheckBucket authorizes a Bucket operation.
 func (e *Evaluator) CheckBucket(ctx context.Context, req BucketRequest) (Decision, error) {
 	policies, nsLabels, err := e.load(ctx, req.Namespace)

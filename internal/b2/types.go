@@ -16,6 +16,12 @@ limitations under the License.
 
 package b2
 
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+)
+
 // Wire types for the B2 Native API v4. Field names and shapes follow
 // https://www.backblaze.com/apidocs. Only the fields the operator uses are
 // modelled; unknown fields are ignored on decode.
@@ -117,7 +123,7 @@ type DefaultRetention struct {
 	Period *RetentionPeriod `json:"period,omitempty"`
 }
 
-// ProtectedValue wraps settings that B2 returns only when the calling key has
+// ProtectedSSE wraps settings that B2 returns only when the calling key has
 // the capability to read them.
 type ProtectedSSE struct {
 	IsClientAuthorizedToRead bool                  `json:"isClientAuthorizedToRead"`
@@ -157,8 +163,9 @@ type ReplicationDestination struct {
 	SourceToDestinationKeyMapping map[string]string `json:"sourceToDestinationKeyMapping"`
 }
 
-// ReplicationConfiguration is sent to b2_update_bucket. A side left nil is
-// not changed by B2.
+// ReplicationConfiguration is a bucket's replication settings. B2 replaces
+// the whole configuration on every b2_update_bucket: a side left nil is
+// removed, so callers must send both sides they want to keep.
 type ReplicationConfiguration struct {
 	AsReplicationSource      *ReplicationSource      `json:"asReplicationSource,omitempty"`
 	AsReplicationDestination *ReplicationDestination `json:"asReplicationDestination,omitempty"`
@@ -288,6 +295,33 @@ var AllCapabilities = []string{
 // IsMasterKey reports whether keyID is the account's master application key,
 // whose ID is the account ID.
 func IsMasterKey(keyID, accountID string) bool { return keyID != "" && keyID == accountID }
+
+// Revision is a bucket revision. B2 documents it as an integer; it is decoded
+// leniently from either a JSON number or a string.
+type Revision int64
+
+func (r *Revision) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*r = 0
+		return nil
+	}
+	var n json.Number
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		n = json.Number(s)
+	} else if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	v, err := strconv.ParseInt(string(n), 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid bucket revision %q: %w", string(n), err)
+	}
+	*r = Revision(v)
+	return nil
+}
 
 // Ptr returns a pointer to v. Convenience for optional wire fields.
 func Ptr[T any](v T) *T { return &v }

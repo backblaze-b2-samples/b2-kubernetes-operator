@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"k8s.io/apimachinery/pkg/api/meta"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -33,22 +33,20 @@ import (
 
 var orphansRevoked = prometheus.NewCounter(prometheus.CounterOpts{
 	Name: "b2_operator_orphaned_keys_revoked_total",
-	Help: "B2 keys created by this cluster whose ApplicationKey no longer exists, revoked by the sweep.",
+	Help: "B2 keys created by this cluster whose owning resource no longer exists, revoked by the sweep.",
 })
 
 func init() { metrics.Registry.MustRegister(orphansRevoked) }
 
-// KeySweeper periodically revokes B2 keys that this cluster created for
-// ApplicationKeys that no longer exist, for example because someone removed
-// the finalizer before the key could be revoked. Only keys whose names carry
-// this cluster's ID are considered, so clusters sharing a B2 account do not
-// interfere. It runs only on the leader.
+// KeySweeper periodically revokes B2 keys this cluster created for resources
+// that no longer exist, for example because someone removed a finalizer by
+// hand. Every key the operator creates is named
+// b2op-<cluster>-<owner uid>-..., so only this cluster's keys are touched
+// and each can be traced to the ApplicationKey, Bucket (replication keys) or
+// B2Account (operations key) that owns it. It runs only on the leader.
 type KeySweeper struct {
 	Deps
-	// APIReader lists ApplicationKeys uncached, so a resource created moments
-	// ago is never mistaken for a missing one.
-	APIReader client.Reader
-	Interval  time.Duration
+	Interval time.Duration
 }
 
 // Start implements manager.Runnable.
@@ -56,13 +54,13 @@ func (s *KeySweeper) Start(ctx context.Context) error {
 	if s.Interval <= 0 {
 		return nil
 	}
-	t := time.NewTicker(s.Interval)
-	defer t.Stop()
+	ticker := time.NewTicker(s.Interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-t.C:
+		case <-ticker.C:
 			if err := s.Sweep(ctx); err != nil {
 				log.FromContext(ctx).Error(err, "orphaned key sweep failed")
 			}
@@ -77,19 +75,17 @@ func (s *KeySweeper) Sweep(ctx context.Context) error {
 	if err := s.APIReader.List(ctx, &pcs); err != nil {
 		return err
 	}
+	prefix := KeyNamePrefix + "-" + s.Options.ClusterID + "-"
 	for i := range pcs.Items {
 		pc := &pcs.Items[i]
-		if !meta.IsStatusConditionTrue(pc.Status.Conditions, b2v1.ConditionReady) {
+		if !isReady(pc) {
 			continue
 		}
-		acct, err := s.Registry.Get(ctx, pc)
+		acct, err := s.Accounts.Get(ctx, pc)
 		if err != nil {
 			logger.Error(err, "skipping provider config", "providerConfig", pc.Name)
 			continue
 		}
-		// List resources after keys: a key created after the resource list
-		// was taken belongs to a resource that is in it.
-		prefix := KeyNamePrefix + "-" + s.Options.ClusterID + "-"
 		keys, err := acct.Client.FindKeys(ctx, func(k b2.ApplicationKey) bool { return strings.HasPrefix(k.KeyName, prefix) })
 		if err != nil {
 			logger.Error(err, "listing keys", "providerConfig", pc.Name)
@@ -98,36 +94,18 @@ func (s *KeySweeper) Sweep(ctx context.Context) error {
 		if len(keys) == 0 {
 			continue
 		}
-		// Keys belong to ApplicationKeys, Buckets (replication keys) or
-		// B2Accounts (operations keys).
-		var aks b2v1.ApplicationKeyList
-		if err := s.APIReader.List(ctx, &aks); err != nil {
+		// Owners are listed after the keys: any key created later belongs
+		// to an owner that is already in the list.
+		owners, err := s.liveOwners(ctx)
+		if err != nil {
 			return err
-		}
-		var buckets b2v1.BucketList
-		if err := s.APIReader.List(ctx, &buckets); err != nil {
-			return err
-		}
-		live := map[string]bool{}
-		for _, ak := range aks.Items {
-			live[uid8(ak.UID)] = true
-		}
-		for _, b := range buckets.Items {
-			live[uid8(b.UID)] = true
-		}
-		var accounts b2v1.B2AccountList
-		if err := s.APIReader.List(ctx, &accounts); err != nil {
-			return err
-		}
-		for _, a := range accounts.Items {
-			live[uid8(a.UID)] = true
 		}
 		for _, k := range keys {
-			parts := strings.SplitN(strings.TrimPrefix(k.KeyName, prefix), "-", 2)
-			if len(parts) < 2 || live[parts[0]] {
+			owner, _, _ := strings.Cut(strings.TrimPrefix(k.KeyName, prefix), "-")
+			if owners[owner] {
 				continue
 			}
-			if err := acct.Client.DeleteKey(ctx, k.ApplicationKeyID); err != nil && !b2.HasCode(err, b2.CodeBadRequest) {
+			if err := acct.Client.DeleteKeyIfExists(ctx, k.ApplicationKeyID); err != nil {
 				logger.Error(err, "revoking orphaned key", "keyID", k.ApplicationKeyID)
 				continue
 			}
@@ -136,4 +114,23 @@ func (s *KeySweeper) Sweep(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// liveOwners returns the short UIDs of every resource that can own keys,
+// read uncached so a resource created moments ago is never missed.
+func (s *KeySweeper) liveOwners(ctx context.Context) (map[string]bool, error) {
+	owners := map[string]bool{}
+	for _, list := range []client.ObjectList{&b2v1.ApplicationKeyList{}, &b2v1.BucketList{}, &b2v1.B2AccountList{}} {
+		if err := s.APIReader.List(ctx, list); err != nil {
+			return nil, err
+		}
+		items, err := apimeta.ExtractList(list)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			owners[uid8(item.(client.Object).GetUID())] = true
+		}
+	}
+	return owners, nil
 }

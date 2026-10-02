@@ -11,7 +11,7 @@ Start with `kubectl describe` on the resource. The `Ready` condition's reason an
 | `BucketNameUnavailable` | Bucket | Bucket names are global across all B2 accounts, and this one is taken. Choose another name. |
 | `BucketAlreadyExists` | Bucket | The bucket exists in your account but is not managed by this resource. Set `spec.adoptExisting: true` if a policy allows adoption. |
 | `BucketOwnedElsewhere` | Bucket | Another resource (possibly in another cluster) owns the bucket. To release it, delete that resource with `Retain`, or remove the `b2operator-owner-uid` bucket info entry in B2. |
-| `DeletionBlocked` | Bucket | ApplicationKeys still reference the bucket (delete them first), or `deletionPolicy: Delete` and the bucket still has file versions (empty it, or set `deletionPolicy: Retain`). |
+| `DeletionBlocked` | Bucket, B2Account | Something still depends on the resource. For a Bucket: ApplicationKeys with credentials for it, a replication rule into it, or `deletionPolicy: Delete` with file versions still in the bucket (empty it, or set `deletionPolicy: Retain`). For a B2Account: Buckets or ApplicationKeys still use its provider config. |
 | `BucketNotReady` | ApplicationKey | The referenced `Bucket` is missing or not `Ready` yet. The key proceeds automatically when it is. |
 | `BucketNotFound` | ApplicationKey | `spec.bucketName` names a bucket that does not exist in the account. |
 | `SecretConflict` | ApplicationKey | A Secret with the target name exists and is not owned by this key. The operator will not overwrite it. Delete it or set `spec.secretName`. |
@@ -21,6 +21,8 @@ Start with `kubectl describe` on the resource. The `Ready` condition's reason an
 | `AccountConflict` | B2Account | Another B2Account already uses this customer and region (email), or provider config name. Alternatively, the credentials Secret holds a key the operator did not write, or B2 refused the email. |
 | `CredentialsMissing` | B2Account | A Group member with this email exists, but no key for it is stored. Store its key in the Secret and set `adoptExisting`. |
 | `RemoteClusterNotReady` | ApplicationKey, RemoteCluster | The `RemoteCluster` named in `deliverTo` is missing or unreachable. Check `kubectl describe remotecluster`. No key is created until its Secret can be delivered. |
+| `ReplicationNotReady` | Bucket | A destination Bucket does not exist in B2 yet, or the operator's key lacks `readBucketReplications`/`writeBucketReplications`. |
+| `Reconciling` | any | A transient step, such as a concurrent change in B2 or the API server; it retries by itself. |
 | `ProviderError` | any | B2 returned an error. The message includes the B2 error code. Transient errors are retried with backoff. |
 
 ## Common questions

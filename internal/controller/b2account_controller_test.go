@@ -25,7 +25,6 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -39,10 +38,6 @@ func uniqueCustomer(base string) string {
 	b := make([]byte, 2)
 	_, _ = rand.Read(b)
 	return base + hex.EncodeToString(b)
-}
-
-func accountConds(a *b2v1.B2Account) func() []metav1.Condition {
-	return func() []metav1.Condition { return a.Status.Conditions }
 }
 
 // newAccount returns a B2Account that grants namespaces labelled
@@ -70,7 +65,7 @@ func TestB2AccountProvisionsAccountAndStoresKey(t *testing.T) {
 	ctx := context.Background()
 	acct := newAccount(c1001+"-eu", c1001, "eu-central")
 	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
-	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonReconciled)
+	eventuallyReason(g, acct, b2v1.ReasonReconciled)
 
 	email := c1001 + "-eu-central@hosting.example.com"
 	g.Expect(acct.Status.Email).To(Equal(email))
@@ -99,7 +94,7 @@ func TestB2AccountProvisionsAccountAndStoresKey(t *testing.T) {
 
 	// A provider config and access policy are published for the account.
 	pc := &b2v1.ClusterProviderConfig{ObjectMeta: metav1.ObjectMeta{Name: c1001 + "-eu"}}
-	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonReconciled)
+	eventuallyReason(g, pc, b2v1.ReasonReconciled)
 	g.Expect(pc.Status.AccountID).To(Equal(acct.Status.AccountID))
 	g.Expect(pc.Status.S3Region).To(Equal("eu-central-003"))
 	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeApplication))
@@ -114,14 +109,14 @@ func TestB2AccountProvisionsAccountAndStoresKey(t *testing.T) {
 	bkt := newBucket(ns, "assets", ns+"-assets")
 	bkt.Spec.ProviderConfigRef.Name = c1001 + "-eu"
 	g.Expect(k8s.Create(ctx, bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonReconciled)
+	eventuallyReason(g, bkt, b2v1.ReasonReconciled)
 	g.Expect(fakeB2.AccountOfBucket(bkt.Spec.BucketName)).To(Equal(acct.Status.AccountID))
 	g.Expect(bkt.Spec.DefaultEncryption.Mode).To(Equal(b2v1.EncryptionModeSSEB2))
 	g.Expect(*fakeB2.Bucket(bkt.Spec.BucketName).DefaultServerSideEncryption.Value.Mode).To(Equal(b2.SSEModeB2))
 
 	// The account cannot be deleted while it is in use.
 	g.Expect(k8s.Delete(ctx, acct)).To(Succeed())
-	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonDeletionBlocked)
+	eventuallyReason(g, acct, b2v1.ReasonDeletionBlocked)
 
 	// Retain: the account stays in the Group and its key stays stored.
 	g.Expect(k8s.Delete(ctx, bkt)).To(Succeed())
@@ -142,7 +137,7 @@ func TestB2AccountEjectKeepsCredentials(t *testing.T) {
 	acct := newAccount(c1002+"-us", c1002, "us-east")
 	acct.Spec.DeletionPolicy = b2v1.AccountDeletionPolicyEject
 	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
-	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonReconciled)
+	eventuallyReason(g, acct, b2v1.ReasonReconciled)
 	id, opsID := acct.Status.AccountID, acct.Status.OperationsKeyID
 
 	g.Expect(k8s.Delete(ctx, acct)).To(Succeed())
@@ -163,17 +158,17 @@ func TestB2AccountSameCustomerAndRegionConflicts(t *testing.T) {
 	ctx := context.Background()
 	first := newAccount(c1003+"-a", c1003, "us-west")
 	g.Expect(k8s.Create(ctx, first)).To(Succeed())
-	eventuallyReason(g, first, accountConds(first), b2v1.ReasonReconciled)
+	eventuallyReason(g, first, b2v1.ReasonReconciled)
 
 	dup := newAccount(c1003+"-b", c1003, "us-west")
 	g.Expect(k8s.Create(ctx, dup)).To(Succeed())
-	eventuallyReason(g, dup, accountConds(dup), b2v1.ReasonAccountConflict)
+	eventuallyReason(g, dup, b2v1.ReasonAccountConflict)
 	g.Expect(dup.Status.AccountID).To(BeEmpty())
 
 	// Same customer in another region is a separate account.
 	other := newAccount(c1003+"-ca", c1003, "ca-east")
 	g.Expect(k8s.Create(ctx, other)).To(Succeed())
-	eventuallyReason(g, other, accountConds(other), b2v1.ReasonReconciled)
+	eventuallyReason(g, other, b2v1.ReasonReconciled)
 	g.Expect(other.Status.Email).To(Equal(c1003 + "-ca-east@hosting.example.com"))
 	g.Expect(other.Status.AccountID).NotTo(Equal(first.Status.AccountID))
 }
@@ -188,7 +183,7 @@ func TestB2AccountRefusesToOverwriteForeignCredentials(t *testing.T) {
 	})).To(Succeed())
 	acct := newAccount(c1004, c1004, "us-west")
 	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
-	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonAccountConflict)
+	eventuallyReason(g, acct, b2v1.ReasonAccountConflict)
 	g.Expect(fakeB2.AccountByEmail(c1004+"-us-west@hosting.example.com")).To(BeEmpty(), "no account may be created when its key could not be stored")
 }
 
@@ -202,7 +197,7 @@ func TestB2AccountAdoptsExistingMember(t *testing.T) {
 
 	acct := newAccount(c1005, c1005, "us-west")
 	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
-	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonCredentialsMissing)
+	eventuallyReason(g, acct, b2v1.ReasonCredentialsMissing)
 
 	g.Expect(k8s.Create(ctx, &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: operatorNS, Name: "b2-account-" + c1005},
@@ -211,237 +206,6 @@ func TestB2AccountAdoptsExistingMember(t *testing.T) {
 	g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(acct), acct)).To(Succeed())
 	acct.Spec.AdoptExisting = true
 	g.Expect(k8s.Update(ctx, acct)).To(Succeed())
-	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonReconciled)
+	eventuallyReason(g, acct, b2v1.ReasonReconciled)
 	g.Expect(acct.Status.AccountID).To(Equal(created.GroupMember.AccountID))
-}
-
-func TestPartnerConfigRequiresMasterKey(t *testing.T) {
-	g := requireEnv(t)
-	ctx := context.Background()
-	name := uniqueCustomer("app-key-partner-")
-	id, secret := fakeB2.AddKey("not-master", []string{"listBuckets", "writeKeys"}, nil, "")
-	g.Expect(k8s.Create(ctx, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: operatorNS, Name: name},
-		StringData: map[string]string{"applicationKeyId": id, "applicationKey": secret},
-	})).To(Succeed())
-	pc := partnerConfigFor(name, name)
-	g.Expect(k8s.Create(ctx, pc)).To(Succeed())
-	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonPartnerNeedsMasterKey)
-	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeApplication))
-}
-
-func TestPartnerAPINotEnabled(t *testing.T) {
-	g := requireEnv(t)
-	ctx := context.Background()
-	c := uniqueCustomer("cust3003")
-	// A customer account's master key: a master key, but not a Group admin.
-	acct := newAccount(c, c, "us-west")
-	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
-	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonReconciled)
-	pc := partnerConfigFor(c+"-as-partner", "b2-account-"+c)
-	g.Expect(k8s.Create(ctx, pc)).To(Succeed())
-	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonPartnerAPINotEnabled)
-	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeMaster))
-	g.Expect(readyCondition(g, pc, func() []metav1.Condition { return pc.Status.Conditions }).Message).To(ContainSubstring("sales"))
-}
-
-func TestMasterKeyForBucketManagementIsFlagged(t *testing.T) {
-	g := requireEnv(t)
-	pc := &b2v1.ClusterProviderConfig{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
-	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonReconciled)
-	g.Expect(pc.Status.KeyType).To(Equal(b2v1.KeyTypeMaster))
-	g.Expect(readyCondition(g, pc, func() []metav1.Condition { return pc.Status.Conditions }).Message).To(ContainSubstring("use a restricted application key"))
-}
-
-func TestBucketCannotUsePartnerConfig(t *testing.T) {
-	g := requireEnv(t)
-	ns := newNamespace(t, true)
-	bkt := newBucket(ns, "via-partner", ns+"-via-partner")
-	bkt.Spec.ProviderConfigRef.Name = partnerConfig
-	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonInvalidSpec)
-	g.Expect(readyCondition(g, bkt, bucketConds(bkt)).Message).To(ContainSubstring("Partner API config"))
-	g.Expect(fakeB2.Bucket(ns + "-via-partner")).To(BeNil())
-}
-
-func partnerConfigFor(name, secret string) *b2v1.ClusterProviderConfig {
-	return &b2v1.ClusterProviderConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: b2v1.ClusterProviderConfigSpec{
-			APIURL:               fakeB2.URL(),
-			CredentialsSecretRef: b2v1.CredentialsSecretReference{Namespace: operatorNS, Name: secret},
-			Partner:              &b2v1.PartnerSettings{GroupID: groupID, MemberEmailTemplate: "{customer}-{region}@hosting.example.com"},
-		},
-	}
-}
-
-func TestPartnerEmailTemplateValidation(t *testing.T) {
-	g := requireEnv(t)
-	for _, tpl := range []string{"{customer}@hosting.example.com", "{customer}-{region}", "{customer}-{region}@localhost"} {
-		pc := &b2v1.ClusterProviderConfig{
-			ObjectMeta: metav1.ObjectMeta{Name: "bad-template"},
-			Spec: b2v1.ClusterProviderConfigSpec{
-				CredentialsSecretRef: b2v1.CredentialsSecretReference{Namespace: operatorNS, Name: "x"},
-				Partner:              &b2v1.PartnerSettings{GroupID: "g", MemberEmailTemplate: tpl},
-			},
-		}
-		err := k8s.Create(context.Background(), pc)
-		g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "template %q: err = %v", tpl, err)
-	}
-}
-
-func TestCrossAccountReplication(t *testing.T) {
-	g := requireEnv(t)
-	c2002 := uniqueCustomer("cust2002")
-	ctx := context.Background()
-	primary := newAccount(c2002+"-west", c2002, "us-west")
-	replica := newAccount(c2002+"-eu", c2002, "eu-central")
-	for _, a := range []*b2v1.B2Account{primary, replica} {
-		g.Expect(k8s.Create(ctx, a)).To(Succeed())
-	}
-	for _, a := range []*b2v1.B2Account{primary, replica} {
-		eventuallyReason(g, a, accountConds(a), b2v1.ReasonReconciled)
-	}
-	pcReady := func(name string) {
-		pc := &b2v1.ClusterProviderConfig{ObjectMeta: metav1.ObjectMeta{Name: name}}
-		eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonReconciled)
-	}
-	pcReady(c2002 + "-west")
-	pcReady(c2002 + "-eu")
-
-	ns := createNamespace(t, c2002+"-app", map[string]string{"customer": c2002})
-	dst := newBucket(ns, "backup", ns+"-backup")
-	dst.Spec.ProviderConfigRef.Name = c2002 + "-eu"
-	dst.Spec.ObjectLock = &b2v1.ObjectLock{Enabled: true, DefaultRetention: &b2v1.DefaultRetention{Mode: b2v1.RetentionModeGovernance, Duration: 30, Unit: "days"}}
-	src := newBucket(ns, "data", ns+"-data")
-	src.Spec.ProviderConfigRef.Name = c2002 + "-west"
-	src.Spec.LifecycleRules = []b2v1.LifecycleRule{{DaysFromHidingToDeleting: ptr[int32](30)}}
-	src.Spec.Replication = []b2v1.ReplicationRule{{Name: "to-eu-central", DestinationBucketRef: b2v1.LocalBucketReference{Name: "backup"}, IncludeExistingFiles: true}}
-	g.Expect(k8s.Create(ctx, src)).To(Succeed())
-	g.Expect(k8s.Create(ctx, dst)).To(Succeed())
-
-	eventuallyReason(g, dst, bucketConds(dst), b2v1.ReasonReconciled)
-	eventuallyReason(g, src, bucketConds(src), b2v1.ReasonReconciled)
-	g.Expect(fakeB2.AccountOfBucket(src.Spec.BucketName)).To(Equal(primary.Status.AccountID))
-	g.Expect(fakeB2.AccountOfBucket(dst.Spec.BucketName)).To(Equal(replica.Status.AccountID))
-
-	rs := src.Status.Replication
-	g.Expect(rs).NotTo(BeNil())
-	g.Expect(rs.Destinations).To(HaveLen(1))
-	srcRC := fakeB2.Bucket(src.Spec.BucketName).ReplicationConfiguration.Value.AsReplicationSource
-	g.Expect(srcRC.ReplicationRules).To(HaveLen(1))
-	g.Expect(srcRC.ReplicationRules[0].DestinationBucketID).To(Equal(dst.Status.BucketID))
-	g.Expect(srcRC.ReplicationRules[0].IncludeExistingFiles).To(BeTrue())
-	g.Expect(*srcRC.SourceApplicationKeyID).To(Equal(rs.SourceKeyID))
-	dstRC := fakeB2.Bucket(dst.Spec.BucketName).ReplicationConfiguration.Value.AsReplicationDestination
-	g.Expect(dstRC.SourceToDestinationKeyMapping).To(HaveKeyWithValue(rs.SourceKeyID, rs.Destinations[0].KeyID))
-	g.Expect(fakeB2.Key(rs.SourceKeyID).Capabilities).To(ConsistOf(sourceKeyCapabilities))
-	g.Expect(fakeB2.Key(rs.Destinations[0].KeyID).Capabilities).To(ConsistOf(destinationKeyCapabilities))
-	g.Expect(fakeB2.Key(rs.Destinations[0].KeyID).AccountID).To(Equal(replica.Status.AccountID))
-
-	// The destination cannot be deleted while it is replicated into.
-	g.Expect(k8s.Delete(ctx, dst)).To(Succeed())
-	eventuallyReason(g, dst, bucketConds(dst), b2v1.ReasonDeletionBlocked)
-
-	// Removing the rule unmaps and revokes both keys; the destination can go.
-	srcKey, dstKey := rs.SourceKeyID, rs.Destinations[0].KeyID
-	g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(src), src)).To(Succeed())
-	src.Spec.Replication = nil
-	g.Expect(k8s.Update(ctx, src)).To(Succeed())
-	g.Eventually(func() *b2.ApplicationKey { return fakeB2.Key(srcKey) }, timeout, poll).Should(BeNil())
-	g.Eventually(func() *b2.ApplicationKey { return fakeB2.Key(dstKey) }, timeout, poll).Should(BeNil())
-	g.Expect(fakeB2.Bucket(src.Spec.BucketName).ReplicationConfiguration.Value.AsReplicationSource).To(BeNil())
-	g.Eventually(func() bool {
-		return apierrors.IsNotFound(k8s.Get(ctx, client.ObjectKeyFromObject(dst), &b2v1.Bucket{}))
-	}, timeout, poll).Should(BeTrue())
-	// The retained destination was released only after the source's key
-	// mapping was removed from it.
-	if released := fakeB2.Bucket(dst.Spec.BucketName).ReplicationConfiguration.Value.AsReplicationDestination; released != nil {
-		g.Expect(released.SourceToDestinationKeyMapping).NotTo(HaveKey(srcKey))
-	}
-}
-
-func TestReplicationNeedsPolicy(t *testing.T) {
-	g := requireEnv(t)
-	ctx := context.Background()
-	ns := newNamespace(t, true) // tenant policy does not allow replication
-	readyBucket(g, ns, "b")
-	src := newBucket(ns, "a", ns+"-a")
-	src.Spec.Replication = []b2v1.ReplicationRule{{Name: "replicate", DestinationBucketRef: b2v1.LocalBucketReference{Name: "b"}}}
-	g.Expect(k8s.Create(ctx, src)).To(Succeed())
-	eventuallyReason(g, src, bucketConds(src), b2v1.ReasonPolicyDenied)
-}
-
-func TestUnencryptedBucketNeedsPolicy(t *testing.T) {
-	g := requireEnv(t)
-	ns := newNamespace(t, true)
-	bkt := newBucket(ns, "plain", ns+"-plain")
-	bkt.Spec.DefaultEncryption = &b2v1.DefaultEncryption{Mode: b2v1.EncryptionModeNone}
-	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonPolicyDenied)
-	g.Expect(fakeB2.Bucket(ns + "-plain")).To(BeNil())
-}
-
-// Each bucket is both a replication source and a destination. B2 replaces a
-// bucket's whole replication configuration on every update, so updating one
-// side must carry the other along.
-func TestBidirectionalReplicationKeepsBothSides(t *testing.T) {
-	g := requireEnv(t)
-	ctx := context.Background()
-	c := uniqueCustomer("cust4004")
-	acct := newAccount(c, c, "us-west")
-	g.Expect(k8s.Create(ctx, acct)).To(Succeed())
-	eventuallyReason(g, acct, accountConds(acct), b2v1.ReasonReconciled)
-	pc := &b2v1.ClusterProviderConfig{ObjectMeta: metav1.ObjectMeta{Name: c}}
-	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonReconciled)
-
-	ns := createNamespace(t, c+"-app", map[string]string{"customer": c})
-	west := newBucket(ns, "west", ns+"-west")
-	east := newBucket(ns, "east", ns+"-east")
-	for _, b := range []*b2v1.Bucket{west, east} {
-		b.Spec.ProviderConfigRef.Name = c
-	}
-	west.Spec.Replication = []b2v1.ReplicationRule{{Name: "west-to-east", DestinationBucketRef: b2v1.LocalBucketReference{Name: "east"}}}
-	east.Spec.Replication = []b2v1.ReplicationRule{{Name: "east-to-west", DestinationBucketRef: b2v1.LocalBucketReference{Name: "west"}}}
-	g.Expect(k8s.Create(ctx, west)).To(Succeed())
-	g.Expect(k8s.Create(ctx, east)).To(Succeed())
-
-	bothSides := func(g Gomega, name string) {
-		rc := fakeB2.Bucket(name).ReplicationConfiguration.Value
-		g.Expect(rc).NotTo(BeNil())
-		g.Expect(rc.AsReplicationSource).NotTo(BeNil(), "%s lost its replication rule", name)
-		g.Expect(rc.AsReplicationSource.ReplicationRules).To(HaveLen(1))
-		g.Expect(rc.AsReplicationDestination).NotTo(BeNil(), "%s lost its destination key mapping", name)
-		g.Expect(rc.AsReplicationDestination.SourceToDestinationKeyMapping).To(HaveLen(1))
-	}
-	g.Eventually(func(g Gomega) {
-		for _, b := range []*b2v1.Bucket{west, east} {
-			g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(b), b)).To(Succeed())
-			g.Expect(meta.IsStatusConditionTrue(b.Status.Conditions, b2v1.ConditionReady)).To(BeTrue())
-		}
-		bothSides(g, west.Spec.BucketName)
-		bothSides(g, east.Spec.BucketName)
-	}, timeout, poll).Should(Succeed())
-
-	// Dropping one direction keeps the other intact on both buckets.
-	g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(east), east)).To(Succeed())
-	east.Spec.Replication = nil
-	g.Expect(k8s.Update(ctx, east)).To(Succeed())
-	g.Eventually(func(g Gomega) {
-		e := fakeB2.Bucket(east.Spec.BucketName).ReplicationConfiguration.Value
-		g.Expect(e.AsReplicationSource).To(BeNil())
-		g.Expect(e.AsReplicationDestination).NotTo(BeNil(), "east must still receive from west")
-		w := fakeB2.Bucket(west.Spec.BucketName).ReplicationConfiguration.Value
-		g.Expect(w.AsReplicationSource).NotTo(BeNil(), "west must still replicate to east")
-		g.Expect(w.AsReplicationDestination).To(BeNil())
-	}, timeout, poll).Should(Succeed())
-}
-
-func TestReplicationRuleNameNeedsSixCharacters(t *testing.T) {
-	g := requireEnv(t)
-	ns := newNamespace(t, true)
-	b := newBucket(ns, "short-rule", ns+"-short-rule")
-	b.Spec.Replication = []b2v1.ReplicationRule{{Name: "short", DestinationBucketRef: b2v1.LocalBucketReference{Name: "x"}}}
-	err := k8s.Create(context.Background(), b)
-	g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "err = %v", err)
 }

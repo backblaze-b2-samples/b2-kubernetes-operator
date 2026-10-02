@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -119,23 +120,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	if clusterID == "" {
-		var ns corev1.Namespace
-		if err := mgr.GetAPIReader().Get(context.Background(), client.ObjectKey{Name: "kube-system"}, &ns); err != nil {
-			setupLog.Error(err, "unable to derive --cluster-id from the kube-system namespace; set it explicitly")
-			os.Exit(1)
-		}
-		clusterID = strings.ReplaceAll(string(ns.UID), "-", "")[:8]
-	}
-	if !regexp.MustCompile(`^[a-z0-9]{8}$`).MatchString(clusterID) {
-		setupLog.Error(nil, "--cluster-id must be 8 characters of [a-z0-9]", "clusterID", clusterID)
+	clusterID, err = resolveClusterID(mgr.GetAPIReader(), clusterID)
+	if err != nil {
+		setupLog.Error(err, "invalid cluster ID")
 		os.Exit(1)
 	}
 	setupLog.Info("cluster identity", "clusterID", clusterID)
 
 	deps := controller.Deps{
-		Client: mgr.GetClient(),
-		Registry: &provider.Registry{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Accounts: &provider.Registry{
 			APIReader:           mgr.GetAPIReader(),
 			UserAgent:           version.UserAgent(),
 			AllowInsecureAPIURL: allowInsecureAPIURL,
@@ -150,34 +145,23 @@ func main() {
 			ClusterID:               clusterID,
 		},
 	}
-
-	if err := (&controller.ClusterProviderConfigReconciler{Deps: deps}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ClusterProviderConfig")
-		os.Exit(1)
-	}
-	if err := (&controller.BucketReconciler{Deps: deps}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Bucket")
-		os.Exit(1)
-	}
 	remotes := &remote.Registry{APIReader: mgr.GetAPIReader()}
-	if err := (&controller.RemoteClusterReconciler{Deps: deps, Remote: remotes}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "RemoteCluster")
-		os.Exit(1)
+	for name, r := range map[string]interface{ SetupWithManager(ctrl.Manager) error }{
+		"ClusterProviderConfig": &controller.ClusterProviderConfigReconciler{Deps: deps},
+		"RemoteCluster":         &controller.RemoteClusterReconciler{Deps: deps, Remote: remotes},
+		"Bucket":                &controller.BucketReconciler{Deps: deps},
+		"ApplicationKey":        &controller.ApplicationKeyReconciler{Deps: deps, Remote: remotes},
+		"B2Account":             &controller.B2AccountReconciler{Deps: deps},
+	} {
+		if err := r.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", name)
+			os.Exit(1)
+		}
 	}
-	if err := (&controller.ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader(), Remote: remotes}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ApplicationKey")
-		os.Exit(1)
-	}
-
-	if err := (&controller.B2AccountReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "B2Account")
-		os.Exit(1)
-	}
-	if err := mgr.Add(&controller.KeySweeper{Deps: deps, APIReader: mgr.GetAPIReader(), Interval: sweepInterval}); err != nil {
+	if err := mgr.Add(&controller.KeySweeper{Deps: deps, Interval: sweepInterval}); err != nil {
 		setupLog.Error(err, "unable to add key sweeper")
 		os.Exit(1)
 	}
-
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -192,4 +176,21 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// resolveClusterID validates an explicit --cluster-id, or derives one from
+// the kube-system namespace UID, which is unique per cluster.
+func resolveClusterID(r client.Reader, flagValue string) (string, error) {
+	id := flagValue
+	if id == "" {
+		var ns corev1.Namespace
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "kube-system"}, &ns); err != nil {
+			return "", fmt.Errorf("deriving it from the kube-system namespace (set --cluster-id instead): %w", err)
+		}
+		id = strings.ReplaceAll(string(ns.UID), "-", "")[:8]
+	}
+	if !regexp.MustCompile(`^[a-z0-9]{8}$`).MatchString(id) {
+		return "", fmt.Errorf("--cluster-id %q must be 8 characters of [a-z0-9]", id)
+	}
+	return id, nil
 }

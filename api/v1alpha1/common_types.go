@@ -16,6 +16,10 @@ limitations under the License.
 
 package v1alpha1
 
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
 // Condition types used by all resources in this group.
 const (
 	// ConditionReady is True when the resource is fully reconciled with B2.
@@ -24,28 +28,27 @@ const (
 
 // Condition reasons.
 const (
-	ReasonReconciled            = "Reconciled"
-	ReasonReconciling           = "Reconciling"
-	ReasonProviderNotReady      = "ProviderConfigNotReady"
-	ReasonInvalidCredentials    = "InvalidCredentials"
-	ReasonCredentialsNotFound   = "CredentialsSecretNotFound"
-	ReasonPolicyDenied          = "PolicyDenied"
-	ReasonBucketNameUnavailable = "BucketNameUnavailable"
-	ReasonBucketOwnedElsewhere  = "BucketOwnedElsewhere"
-	ReasonBucketExists          = "BucketAlreadyExists"
-	ReasonBucketNotReady        = "BucketNotReady"
-	ReasonBucketNotFound        = "BucketNotFound"
-	ReasonDeletionBlocked       = "DeletionBlocked"
-	ReasonSecretConflict        = "SecretConflict"
-	ReasonProviderError         = "ProviderError"
-	ReasonInvalidSpec           = "InvalidSpec"
-	ReasonUnsupported           = "Unsupported"
-	ReasonAccountConflict       = "AccountConflict"
-	ReasonPartnerAPINotEnabled  = "PartnerAPINotEnabled"
-	ReasonPartnerNeedsMasterKey = "PartnerRequiresMasterKey"
-	ReasonCredentialsMissing    = "CredentialsMissing"
-	ReasonReplicationNotReady   = "ReplicationNotReady"
-	ReasonRemoteClusterNotReady = "RemoteClusterNotReady"
+	ReasonReconciled                = "Reconciled"
+	ReasonReconciling               = "Reconciling"
+	ReasonProviderConfigNotReady    = "ProviderConfigNotReady"
+	ReasonInvalidCredentials        = "InvalidCredentials"
+	ReasonCredentialsSecretNotFound = "CredentialsSecretNotFound"
+	ReasonPolicyDenied              = "PolicyDenied"
+	ReasonBucketNameUnavailable     = "BucketNameUnavailable"
+	ReasonBucketOwnedElsewhere      = "BucketOwnedElsewhere"
+	ReasonBucketAlreadyExists       = "BucketAlreadyExists"
+	ReasonBucketNotReady            = "BucketNotReady"
+	ReasonBucketNotFound            = "BucketNotFound"
+	ReasonDeletionBlocked           = "DeletionBlocked"
+	ReasonSecretConflict            = "SecretConflict"
+	ReasonProviderError             = "ProviderError"
+	ReasonInvalidSpec               = "InvalidSpec"
+	ReasonAccountConflict           = "AccountConflict"
+	ReasonPartnerAPINotEnabled      = "PartnerAPINotEnabled"
+	ReasonPartnerRequiresMasterKey  = "PartnerRequiresMasterKey"
+	ReasonCredentialsMissing        = "CredentialsMissing"
+	ReasonReplicationNotReady       = "ReplicationNotReady"
+	ReasonRemoteClusterNotReady     = "RemoteClusterNotReady"
 )
 
 // ProviderConfigReference names the ClusterProviderConfig holding the B2
@@ -59,8 +62,8 @@ type ProviderConfigReference struct {
 	Name string `json:"name,omitempty"`
 }
 
-// ProviderConfigName returns the referenced name, defaulting to "default".
-func (r ProviderConfigReference) ProviderConfigName() string {
+// NameOrDefault returns the referenced name, defaulting to "default".
+func (r ProviderConfigReference) NameOrDefault() string {
 	if r.Name == "" {
 		return "default"
 	}
@@ -75,3 +78,11 @@ type Capability string
 // key holding them can escalate to the full power of the account, so they are
 // denied to tenants by default.
 var KeyManagementCapabilities = []Capability{"listKeys", "writeKeys", "deleteKeys"}
+
+// GetConditions gives the controllers uniform access to each resource's
+// status conditions.
+func (b *Bucket) GetConditions() *[]metav1.Condition                { return &b.Status.Conditions }
+func (k *ApplicationKey) GetConditions() *[]metav1.Condition        { return &k.Status.Conditions }
+func (a *B2Account) GetConditions() *[]metav1.Condition             { return &a.Status.Conditions }
+func (c *ClusterProviderConfig) GetConditions() *[]metav1.Condition { return &c.Status.Conditions }
+func (r *RemoteCluster) GetConditions() *[]metav1.Condition         { return &r.Status.Conditions }

@@ -111,12 +111,7 @@ func (r *Registry) Refresh(ctx context.Context, pc *b2v1.ClusterProviderConfig) 
 	if ok && e.uid == pc.UID && e.generation == pc.Generation && e.secretRV == rv {
 		c = e.account.Client
 	} else {
-		c = b2.New(b2.Options{
-			BaseURL:          pc.Spec.APIURL,
-			ApplicationKeyID: keyID,
-			ApplicationKey:   key,
-			UserAgent:        r.UserAgent,
-		})
+		c = r.NewClient(pc.Spec.APIURL, keyID, key)
 	}
 
 	auth, err := c.Authorize(ctx)
@@ -142,6 +137,12 @@ func (r *Registry) Refresh(ctx context.Context, pc *b2v1.ClusterProviderConfig) 
 	}
 	r.entries[pc.Name] = &entry{uid: pc.UID, generation: pc.Generation, secretRV: rv, account: acct}
 	return acct, nil
+}
+
+// NewClient returns a client for other credentials, such as a key the
+// operator created, using the same settings as the registry's clients.
+func (r *Registry) NewClient(apiURL, keyID, key string) *b2.Client {
+	return b2.New(b2.Options{BaseURL: apiURL, ApplicationKeyID: keyID, ApplicationKey: key, UserAgent: r.UserAgent})
 }
 
 // Forget drops the cached client for a deleted provider config.

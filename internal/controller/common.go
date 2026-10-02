@@ -14,24 +14,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package controller holds the operator's reconcilers. Each reconciler
+// follows the same shape: load the resource, handle deletion, ensure the
+// finalizer, reconcile against B2 (policy first, then B2, then status), and
+// commit status once. Shared pieces live in this file and in status.go,
+// errors.go, watches.go and events.go.
 package controller
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	b2v1 "github.com/backblaze-b2-samples/b2-kubernetes-operator/api/v1alpha1"
-	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2"
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/policy"
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/provider"
 )
@@ -39,7 +40,7 @@ import (
 const (
 	// FieldOwner is the field manager name used for writes.
 	FieldOwner = "b2-operator"
-	// Finalizer guards B2 resources on Bucket and ApplicationKey.
+	// Finalizer guards B2 resources on Buckets, ApplicationKeys and B2Accounts.
 	Finalizer = "b2.backblaze.com/finalizer"
 	// LabelManagedBy marks Secrets written by the operator. The manager only
 	// caches Secrets with this label.
@@ -80,11 +81,15 @@ type Options struct {
 
 // Deps are the collaborators shared by the reconcilers.
 type Deps struct {
-	Client   client.Client
-	Registry *provider.Registry
-	Policy   *policy.Evaluator
-	Recorder events.EventRecorder
-	Options  Options
+	Client client.Client
+	// APIReader reads from the API server directly: Secrets outside the
+	// operator's label-filtered cache, and freshness checks before
+	// destructive actions.
+	APIReader client.Reader
+	Accounts  *provider.Registry
+	Policy    *policy.Evaluator
+	Recorder  events.EventRecorder
+	Options   Options
 	// Now is the clock; defaults to time.Now.
 	Now func() time.Time
 }
@@ -96,72 +101,8 @@ func (d *Deps) now() time.Time {
 	return time.Now()
 }
 
-func setCondition(conds *[]metav1.Condition, generation int64, status metav1.ConditionStatus, reason, message string) {
-	meta.SetStatusCondition(conds, metav1.Condition{
-		Type:               b2v1.ConditionReady,
-		Status:             status,
-		ObservedGeneration: generation,
-		Reason:             reason,
-		Message:            truncate(message, 32768),
-	})
-}
-
-// eventType is Normal for conditions that resolve on their own (waiting on
-// another resource) and Warning for anything that needs attention.
-func eventType(reason string) string {
-	switch reason {
-	case b2v1.ReasonBucketNotReady, b2v1.ReasonBucketNotFound, b2v1.ReasonProviderNotReady, b2v1.ReasonReconciling:
-		return corev1.EventTypeNormal
-	}
-	return corev1.EventTypeWarning
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-3] + "..."
-}
-
-// stageError is a reconcile failure with the condition it should produce.
-type stageError struct {
-	reason  string
-	message string
-	// requeueAfter, when set, schedules a retry instead of returning an
-	// error (used for conditions that need a human or another resource).
-	requeueAfter time.Duration
-	// err is returned to controller-runtime for exponential backoff.
-	err error
-}
-
-func (e *stageError) Error() string { return e.reason + ": " + e.message }
-
-func waitFor(reason string, after time.Duration, format string, args ...any) *stageError {
-	return &stageError{reason: reason, message: fmt.Sprintf(format, args...), requeueAfter: after}
-}
-
-// providerError converts a B2 API error into a stageError: throttling is
-// retried after the server's Retry-After, other transient errors with
-// controller backoff, and permanent errors after a long delay.
-func providerError(action string, err error) *stageError {
-	se := &stageError{reason: b2v1.ReasonProviderError, message: fmt.Sprintf("%s: %v", action, err)}
-	var credErr *b2.CredentialsError
-	switch {
-	case errors.As(err, &credErr):
-		se.reason = b2v1.ReasonInvalidCredentials
-		se.requeueAfter = 5 * time.Minute
-	case b2.RetryAfter(err) > 0:
-		se.requeueAfter = b2.RetryAfter(err)
-	case b2.IsRetryable(err):
-		se.err = err
-	default:
-		se.requeueAfter = 10 * time.Minute
-	}
-	return se
-}
-
-// resolveAccount returns the B2 account for a provider config name, for
-// bucket and key management. Partner configs are refused.
+// resolveAccount returns the B2 account for bucket and key management.
+// Partner configs are refused: their master key only provisions B2Accounts.
 func (d *Deps) resolveAccount(ctx context.Context, name string) (*provider.Account, *stageError) {
 	return d.resolve(ctx, name, false)
 }
@@ -175,44 +116,35 @@ func (d *Deps) resolve(ctx context.Context, name string, partner bool) (*provide
 	var pc b2v1.ClusterProviderConfig
 	if err := d.Client.Get(ctx, client.ObjectKey{Name: name}, &pc); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, waitFor(b2v1.ReasonProviderNotReady, time.Minute, "ClusterProviderConfig %q not found", name)
+			return nil, waitFor(b2v1.ReasonProviderConfigNotReady, time.Minute, "ClusterProviderConfig %q not found", name)
 		}
-		return nil, &stageError{reason: b2v1.ReasonProviderNotReady, message: err.Error(), err: err}
+		return nil, &stageError{reason: b2v1.ReasonProviderConfigNotReady, message: err.Error(), err: err}
 	}
 	if pc.Spec.Partner != nil && !partner {
 		return nil, waitFor(b2v1.ReasonInvalidSpec, 10*time.Minute,
 			"ClusterProviderConfig %q is a Partner API config holding the Group admin's master key; it only provisions B2Accounts. Use the provider config of a B2Account (or another account) instead", name)
 	}
 	if !meta.IsStatusConditionTrue(pc.Status.Conditions, b2v1.ConditionReady) {
-		msg := "not ready"
-		if c := meta.FindStatusCondition(pc.Status.Conditions, b2v1.ConditionReady); c != nil {
-			msg = c.Message
-		}
-		return nil, waitFor(b2v1.ReasonProviderNotReady, time.Minute, "ClusterProviderConfig %q: %s", name, msg)
+		return nil, waitFor(b2v1.ReasonProviderConfigNotReady, time.Minute, "ClusterProviderConfig %q: %s", name, readyMessage(&pc))
 	}
-	acct, err := d.Registry.Get(ctx, &pc)
+	acct, err := d.Accounts.Get(ctx, &pc)
 	if err != nil {
 		if errors.Is(err, provider.ErrSecretNotFound) {
-			return nil, waitFor(b2v1.ReasonProviderNotReady, time.Minute, "ClusterProviderConfig %q: %v", name, err)
+			return nil, waitFor(b2v1.ReasonProviderConfigNotReady, time.Minute, "ClusterProviderConfig %q: %v", name, err)
 		}
 		return nil, providerError("authorizing with B2", err)
 	}
 	return acct, nil
 }
 
-// result converts a stageError into a reconcile result, recording it on the
-// object's Ready condition via setReady.
-func result(se *stageError, setReady func(reason, message string)) (ctrl.Result, error) {
-	setReady(se.reason, se.message)
-	if se.err != nil {
-		return ctrl.Result{}, se.err
+// millisTime converts a B2 timestamp (milliseconds since the epoch) to a
+// Kubernetes time, or nil.
+func millisTime(ms *int64) *metav1.Time {
+	if ms == nil {
+		return nil
 	}
-	return ctrl.Result{RequeueAfter: se.requeueAfter}, nil
-}
-
-// patchStatus writes obj's status with an optimistic lock against orig.
-func patchStatus(ctx context.Context, c client.Client, obj, orig client.Object) error {
-	return c.Status().Patch(ctx, obj, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}), client.FieldOwner(FieldOwner))
+	t := metav1.NewTime(time.UnixMilli(*ms))
+	return &t
 }
 
 // minPositive returns the smallest positive duration, or zero.

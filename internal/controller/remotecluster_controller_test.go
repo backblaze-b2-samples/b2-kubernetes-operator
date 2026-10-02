@@ -29,10 +29,6 @@ import (
 	b2v1 "github.com/backblaze-b2-samples/b2-kubernetes-operator/api/v1alpha1"
 )
 
-func remoteConds(rc *b2v1.RemoteCluster) func() []metav1.Condition {
-	return func() []metav1.Condition { return rc.Status.Conditions }
-}
-
 // newRemoteCluster registers a RemoteCluster with the given kubeconfig.
 func newRemoteCluster(t *testing.T, g *WithT, name string, kubeconfig []byte) *b2v1.RemoteCluster {
 	t.Helper()
@@ -61,7 +57,7 @@ func TestKeyDeliveredToRemoteCluster(t *testing.T) {
 	g := requireEnv(t)
 	ctx := context.Background()
 	rc := newRemoteCluster(t, g, uniqueCustomer("customer-"), remoteKubeconfig)
-	eventuallyReason(g, rc, remoteConds(rc), b2v1.ReasonReconciled)
+	eventuallyReason(g, rc, b2v1.ReasonReconciled)
 	g.Expect(rc.Status.ServerVersion).NotTo(BeEmpty())
 
 	ns := newNamespace(t, true)
@@ -70,7 +66,7 @@ func TestKeyDeliveredToRemoteCluster(t *testing.T) {
 	key := newKey(ns, "app", "remote", "readFiles")
 	key.Spec.DeliverTo = &b2v1.DeliveryTarget{RemoteCluster: rc.Name, Namespace: ns}
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	g.Expect(key.Status.DeliveredTo).To(Equal(rc.Name + "/" + ns))
 
 	// The Secret is in the remote cluster, marked as ours, and not local.
@@ -103,7 +99,7 @@ func TestRemoteDeliveryNeedsPolicy(t *testing.T) {
 	g := requireEnv(t)
 	ctx := context.Background()
 	rc := newRemoteCluster(t, g, uniqueCustomer("customer-"), remoteKubeconfig)
-	eventuallyReason(g, rc, remoteConds(rc), b2v1.ReasonReconciled)
+	eventuallyReason(g, rc, b2v1.ReasonReconciled)
 	ns := newNamespace(t, true)
 	readyBucket(g, ns, "denied")
 
@@ -111,7 +107,7 @@ func TestRemoteDeliveryNeedsPolicy(t *testing.T) {
 	key := newKey(ns, "app", "denied", "readFiles")
 	key.Spec.DeliverTo = &b2v1.DeliveryTarget{RemoteCluster: rc.Name, Namespace: "kube-system"}
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	c := eventuallyReasonCondition(g, key, keyConds(key), b2v1.ReasonPolicyDenied)
+	c := eventuallyReason(g, key, b2v1.ReasonPolicyDenied)
 	g.Expect(c.Message).To(ContainSubstring("kube-system"))
 	g.Expect(apierrors.IsNotFound(remoteK8s.Get(ctx, client.ObjectKey{Namespace: "kube-system", Name: "app"}, &corev1.Secret{}))).To(BeTrue())
 
@@ -119,14 +115,14 @@ func TestRemoteDeliveryNeedsPolicy(t *testing.T) {
 	other := newKey(ns, "other", "denied", "readFiles")
 	other.Spec.DeliverTo = &b2v1.DeliveryTarget{RemoteCluster: "prod-cluster", Namespace: ns}
 	g.Expect(k8s.Create(ctx, other)).To(Succeed())
-	eventuallyReason(g, other, keyConds(other), b2v1.ReasonPolicyDenied)
+	eventuallyReason(g, other, b2v1.ReasonPolicyDenied)
 }
 
 func TestRemoteSecretConflictIsNotOverwritten(t *testing.T) {
 	g := requireEnv(t)
 	ctx := context.Background()
 	rc := newRemoteCluster(t, g, uniqueCustomer("customer-"), remoteKubeconfig)
-	eventuallyReason(g, rc, remoteConds(rc), b2v1.ReasonReconciled)
+	eventuallyReason(g, rc, b2v1.ReasonReconciled)
 	ns := newNamespace(t, true)
 	g.Expect(remoteK8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
 	g.Expect(remoteK8s.Create(ctx, &corev1.Secret{
@@ -138,7 +134,7 @@ func TestRemoteSecretConflictIsNotOverwritten(t *testing.T) {
 	key := newKey(ns, "app", "conflict", "readFiles")
 	key.Spec.DeliverTo = &b2v1.DeliveryTarget{RemoteCluster: rc.Name, Namespace: ns}
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonSecretConflict)
+	eventuallyReason(g, key, b2v1.ReasonSecretConflict)
 	g.Expect(string(getRemoteSecret(g, ns, "app").Data["password"])).To(Equal("customer-owned"))
 
 	g.Expect(k8s.Delete(ctx, key)).To(Succeed())
@@ -156,7 +152,7 @@ func TestKeyWaitsForRemoteCluster(t *testing.T) {
 	key := newKey(ns, "app", "waiting", "readFiles")
 	key.Spec.DeliverTo = &b2v1.DeliveryTarget{RemoteCluster: "customer-not-registered", Namespace: ns}
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonRemoteClusterNotReady)
+	eventuallyReason(g, key, b2v1.ReasonRemoteClusterNotReady)
 	g.Expect(key.Status.KeyID).To(BeEmpty(), "no key may be created before its Secret can be delivered")
 	expectInvalidUpdate(g, key, func() { key.Spec.DeliverTo.Namespace = "elsewhere" })
 }
@@ -171,12 +167,6 @@ contexts: [{name: x, context: {cluster: c, user: u}}]
 current-context: x
 `)
 	rc := newRemoteCluster(t, g, uniqueCustomer("customer-"), unsafe)
-	c := eventuallyReasonCondition(g, rc, remoteConds(rc), b2v1.ReasonInvalidSpec)
+	c := eventuallyReason(g, rc, b2v1.ReasonInvalidSpec)
 	g.Expect(c.Message).To(ContainSubstring("local files"))
-}
-
-// eventuallyReasonCondition is eventuallyReason returning the condition.
-func eventuallyReasonCondition(g *WithT, obj client.Object, conds func() []metav1.Condition, reason string) *metav1.Condition {
-	eventuallyReason(g, obj, conds, reason)
-	return readyCondition(g, obj, conds)
 }

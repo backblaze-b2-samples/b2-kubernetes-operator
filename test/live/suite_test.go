@@ -126,8 +126,9 @@ func run(m *testing.M) int {
 	})
 	must(err)
 	deps := controller.Deps{
-		Client: mgr.GetClient(),
-		Registry: &provider.Registry{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Accounts: &provider.Registry{
 			APIReader: mgr.GetAPIReader(),
 			UserAgent: "b2-kubernetes-operator-live-test",
 			// Only for dry-running this suite against cmd/b2fake.
@@ -145,8 +146,8 @@ func run(m *testing.M) int {
 	}
 	must((&controller.ClusterProviderConfigReconciler{Deps: deps}).SetupWithManager(mgr))
 	must((&controller.BucketReconciler{Deps: deps}).SetupWithManager(mgr))
-	must((&controller.ApplicationKeyReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
-	must((&controller.B2AccountReconciler{Deps: deps, APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
+	must((&controller.ApplicationKeyReconciler{Deps: deps}).SetupWithManager(mgr))
+	must((&controller.B2AccountReconciler{Deps: deps}).SetupWithManager(mgr))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

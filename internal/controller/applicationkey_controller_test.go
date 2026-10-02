@@ -34,15 +34,11 @@ import (
 	"github.com/backblaze-b2-samples/b2-kubernetes-operator/internal/b2/b2fake"
 )
 
-func keyConds(k *b2v1.ApplicationKey) func() []metav1.Condition {
-	return func() []metav1.Condition { return k.Status.Conditions }
-}
-
 // readyBucket creates a Bucket and waits for it to be reconciled.
 func readyBucket(g *WithT, ns, name string) *b2v1.Bucket {
 	bkt := newBucket(ns, name, ns+"-"+name)
 	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonReconciled)
+	eventuallyReason(g, bkt, b2v1.ReasonReconciled)
 	return bkt
 }
 
@@ -74,7 +70,7 @@ func TestKeyScopedToBucketWithPrefix(t *testing.T) {
 	key.Spec.ValidFor = &metav1.Duration{Duration: 48 * time.Hour}
 	key.Spec.SecretTemplate = &b2v1.SecretTemplate{Labels: map[string]string{"app": "reports"}}
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 
 	b2key := fakeB2.Key(key.Status.KeyID)
 	g.Expect(b2key).NotTo(BeNil())
@@ -108,10 +104,10 @@ func TestKeyWaitsForBucket(t *testing.T) {
 	ns := newNamespace(t, true)
 	key := newKey(ns, "early", "later", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonBucketNotFound)
+	eventuallyReason(g, key, b2v1.ReasonBucketNotFound)
 
 	readyBucket(g, ns, "later")
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 }
 
 func TestKeySpecChangeRotatesWithGracePeriod(t *testing.T) {
@@ -122,7 +118,7 @@ func TestKeySpecChangeRotatesWithGracePeriod(t *testing.T) {
 	key := newKey(ns, "app", "rotate", "readFiles")
 	key.Spec.Rotation = &b2v1.KeyRotation{GracePeriod: &metav1.Duration{Duration: 3 * time.Second}}
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	oldID := key.Status.KeyID
 
 	g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(key), key)).To(Succeed())
@@ -155,7 +151,7 @@ func TestKeyReplacedWhenSecretDeleted(t *testing.T) {
 	readyBucket(g, ns, "lost")
 	key := newKey(ns, "app", "lost", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	oldID := key.Status.KeyID
 
 	g.Expect(k8s.Delete(ctx, getSecret(g, ns, "app"))).To(Succeed())
@@ -173,7 +169,7 @@ func TestKeyReplacedWhenRevokedOutsideKubernetes(t *testing.T) {
 	readyBucket(g, ns, "revoked")
 	key := newKey(ns, "app", "revoked", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	oldID := key.Status.KeyID
 
 	fakeB2.DeleteKeyDirect(oldID)
@@ -197,7 +193,7 @@ func TestKeyDoesNotOverwriteUnownedSecret(t *testing.T) {
 	key := newKey(ns, "app", "conflict", "readFiles")
 	key.Spec.SecretName = "precious"
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonSecretConflict)
+	eventuallyReason(g, key, b2v1.ReasonSecretConflict)
 
 	g.Expect(string(getSecret(g, ns, "precious").Data["password"])).To(Equal("hunter2"))
 	// No key may be created for a conflicting Secret. (Compare by owner, not
@@ -228,7 +224,7 @@ func TestKeyDeletionRevokesKey(t *testing.T) {
 	readyBucket(g, ns, "cleanup")
 	key := newKey(ns, "app", "cleanup", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	id := key.Status.KeyID
 
 	g.Expect(k8s.Delete(ctx, key)).To(Succeed())
@@ -253,10 +249,10 @@ func TestKeyPolicyDenials(t *testing.T) {
 		g.Expect(k8s.Create(ctx, k)).To(Succeed())
 	}
 	for _, k := range []*b2v1.ApplicationKey{accountWide, notAllowedCap, keyManagement, external} {
-		eventuallyReason(g, k, keyConds(k), b2v1.ReasonPolicyDenied)
+		eventuallyReason(g, k, b2v1.ReasonPolicyDenied)
 		g.Expect(k.Status.KeyID).To(BeEmpty())
 	}
-	c := readyCondition(g, keyManagement, keyConds(keyManagement))
+	c := readyCondition(g, keyManagement)
 	g.Expect(c.Message).To(ContainSubstring("disabled by the operator"))
 }
 
@@ -267,7 +263,7 @@ func TestKeyRevokedWhenPolicyNoLongerAllowsIt(t *testing.T) {
 	readyBucket(g, ns, "tighten")
 	key := newKey(ns, "app", "tighten", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	id := key.Status.KeyID
 
 	// Remove the namespace from the tenant policy.
@@ -277,7 +273,7 @@ func TestKeyRevokedWhenPolicyNoLongerAllowsIt(t *testing.T) {
 	g.Expect(k8s.Update(ctx, &nsObj)).To(Succeed())
 
 	// Revocation is scheduled, not immediate: the key survives a brief gap.
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonPolicyDenied)
+	eventuallyReason(g, key, b2v1.ReasonPolicyDenied)
 	g.Expect(key.Status.ScheduledRevocation).NotTo(BeNil())
 	g.Expect(fakeB2.Key(id)).NotTo(BeNil(), "key must not be revoked before the grace period")
 	g.Eventually(func() *b2.ApplicationKey { return fakeB2.Key(id) }, timeout, poll).Should(BeNil())
@@ -296,7 +292,7 @@ func TestKeyOrphanFromLostCreateResponseIsRevoked(t *testing.T) {
 	fakeB2.InjectFault("b2_create_key", b2fake.Fault{Status: 503, Code: "service_unavailable", AfterApply: true})
 	key := newKey(ns, "app", "orphan", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 
 	prefix := KeyNamePrefix + "-" + testClusterID + "-" + uid8(key.UID) + "-"
 	var ours []string
@@ -339,18 +335,18 @@ func TestKeyPolicyGapIsTolerated(t *testing.T) {
 	key := newKey(ns, "app", "gap", "readFiles")
 	key.Spec.Rotation = &b2v1.KeyRotation{GracePeriod: &metav1.Duration{Duration: time.Hour}}
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	id := key.Status.KeyID
 
 	var nsObj corev1.Namespace
 	g.Expect(k8s.Get(ctx, client.ObjectKey{Name: ns}, &nsObj)).To(Succeed())
 	delete(nsObj.Labels, tenantLabel)
 	g.Expect(k8s.Update(ctx, &nsObj)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonPolicyDenied)
+	eventuallyReason(g, key, b2v1.ReasonPolicyDenied)
 
 	nsObj.Labels[tenantLabel] = "true"
 	g.Expect(k8s.Update(ctx, &nsObj)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	g.Expect(key.Status.KeyID).To(Equal(id), "the key must survive a policy gap shorter than its grace period")
 	g.Expect(key.Status.ScheduledRevocation).To(BeNil())
 	g.Expect(fakeB2.Key(id)).NotTo(BeNil())
@@ -363,7 +359,7 @@ func TestKeyRecoveredAfterInterruptedCreate(t *testing.T) {
 	readyBucket(g, ns, "recover")
 	key := newKey(ns, "app", "recover", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	id := key.Status.KeyID
 
 	// Simulate the operator stopping after writing the Secret but before
@@ -390,7 +386,7 @@ func TestSweepRevokesKeysOfForceDeletedResources(t *testing.T) {
 	readyBucket(g, ns, "sweep")
 	key := newKey(ns, "app", "sweep", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	id := key.Status.KeyID
 	other := fakeB2.Keys() // keys of live resources and foreign keys must survive
 

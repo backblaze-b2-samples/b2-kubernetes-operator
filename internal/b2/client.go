@@ -71,7 +71,6 @@ type Options struct {
 // Client is safe for concurrent use.
 type Client struct {
 	opts Options
-	http *http.Client
 
 	mu   sync.Mutex
 	auth *Authorization
@@ -101,7 +100,7 @@ func New(opts Options) *Client {
 	if opts.MaxBackoff <= 0 {
 		opts.MaxBackoff = 15 * time.Second
 	}
-	return &Client{opts: opts, http: opts.HTTPClient}
+	return &Client{opts: opts}
 }
 
 // Authorize performs b2_authorize_account now, replacing any cached token,
@@ -114,16 +113,6 @@ func (c *Client) Authorize(ctx context.Context) (*Authorization, error) {
 	c.mu.Lock()
 	c.auth = auth
 	c.mu.Unlock()
-	cp := *auth
-	return &cp, nil
-}
-
-// Authorization returns the cached authorization, authorizing first if needed.
-func (c *Client) Authorization(ctx context.Context) (*Authorization, error) {
-	auth, err := c.currentAuth(ctx)
-	if err != nil {
-		return nil, err
-	}
 	cp := *auth
 	return &cp, nil
 }
@@ -210,7 +199,7 @@ func (c *Client) DeleteBucket(ctx context.Context, bucketID string) error {
 
 // CreateKey calls b2_create_key. It is never retried, so a lost response can
 // leave an orphaned key; callers should record the key name beforehand and
-// clean up with FindKeysByName.
+// clean up with FindKeys.
 func (c *Client) CreateKey(ctx context.Context, req CreateKeyRequest) (*ApplicationKey, error) {
 	var resp ApplicationKey
 	err := c.call(ctx, "b2_create_key", false, func(a *Authorization) any {
@@ -228,6 +217,19 @@ func (c *Client) DeleteKey(ctx context.Context, applicationKeyID string) error {
 	return c.call(ctx, "b2_delete_key", true, func(*Authorization) any {
 		return deleteKeyRequest{ApplicationKeyID: applicationKeyID}
 	}, nil)
+}
+
+// DeleteKeyIfExists deletes a key, treating one that no longer exists as
+// deleted. (B2 currently answers success for a missing key; an older or
+// stricter response of 400 is handled the same way after checking.)
+func (c *Client) DeleteKeyIfExists(ctx context.Context, applicationKeyID string) error {
+	err := c.DeleteKey(ctx, applicationKeyID)
+	if apiErr, ok := AsAPIError(err); ok && apiErr.Status == http.StatusBadRequest {
+		if exists, xerr := c.KeyExists(ctx, applicationKeyID); xerr == nil && !exists {
+			return nil
+		}
+	}
+	return err
 }
 
 // ListKeys calls b2_list_keys for one page. It returns the keys and the
@@ -410,7 +412,7 @@ func (c *Client) authorize(ctx context.Context) (*Authorization, error) {
 func (c *Client) send(op string, req *http.Request, out any) error {
 	req.Header.Set("User-Agent", c.opts.UserAgent)
 	start := time.Now()
-	resp, err := c.http.Do(req)
+	resp, err := c.opts.HTTPClient.Do(req)
 	if err != nil {
 		observe(op, "error", start)
 		return fmt.Errorf("b2 %s: %w", op, err)
@@ -423,11 +425,12 @@ func (c *Client) send(op string, req *http.Request, out any) error {
 		return fmt.Errorf("b2 %s: reading response: %w", op, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		apiErr := &APIError{Operation: op, Status: resp.StatusCode}
+		apiErr := &APIError{}
 		if json.Unmarshal(data, apiErr) != nil || apiErr.Code == "" {
 			apiErr.Code = strings.ToLower(strings.ReplaceAll(http.StatusText(resp.StatusCode), " ", "_"))
 			apiErr.Message = strings.TrimSpace(string(data))
 		}
+		// The body's status and our op name are authoritative over the JSON.
 		apiErr.Status = resp.StatusCode
 		apiErr.Operation = op
 		apiErr.RetryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))

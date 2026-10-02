@@ -21,7 +21,6 @@ import (
 	"errors"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -46,38 +45,33 @@ type RemoteClusterReconciler struct {
 func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var rc b2v1.RemoteCluster
 	if err := r.Client.Get(ctx, req.NamespacedName, &rc); err != nil {
-		if apierrors.IsNotFound(err) {
+		if client.IgnoreNotFound(err) == nil {
 			r.Remote.Forget(req.Name)
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	orig := rc.DeepCopy()
-	setReady := func(reason, msg string) {
-		setCondition(&rc.Status.Conditions, rc.Generation, metav1.ConditionFalse, reason, msg)
-	}
-
-	var res ctrl.Result
-	var err error
-	_, version, rerr := r.Remote.Refresh(ctx, &rc)
-	switch {
-	case errors.Is(rerr, remote.ErrSecretNotFound):
-		res, err = result(waitFor(b2v1.ReasonCredentialsNotFound, time.Minute, "%v", rerr), setReady)
-	case errors.Is(rerr, remote.ErrInvalidKubeconfig):
-		res, err = result(waitFor(b2v1.ReasonInvalidSpec, 10*time.Minute, "%v", rerr), setReady)
-	case rerr != nil:
-		res, err = result(waitFor(b2v1.ReasonRemoteClusterNotReady, time.Minute, "%v", rerr), setReady)
-	default:
-		now := metav1.NewTime(r.now())
-		rc.Status.ServerVersion = version
-		rc.Status.LastCheckedTime = &now
-		setCondition(&rc.Status.Conditions, rc.Generation, metav1.ConditionTrue, b2v1.ReasonReconciled, "Connected to Kubernetes "+version)
-		res = ctrl.Result{RequeueAfter: r.Options.ResyncPeriod}
-	}
+	res, err := r.reconcile(ctx, &rc)
 	rc.Status.ObservedGeneration = rc.Generation
-	if perr := patchStatus(ctx, r.Client, &rc, orig); perr != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(perr)
+	return r.commitStatus(ctx, &rc, orig, res, err)
+}
+
+func (r *RemoteClusterReconciler) reconcile(ctx context.Context, rc *b2v1.RemoteCluster) (ctrl.Result, error) {
+	notReady := r.notReady(rc)
+	_, version, err := r.Remote.Refresh(ctx, rc)
+	switch {
+	case errors.Is(err, remote.ErrSecretNotFound):
+		return result(waitFor(b2v1.ReasonCredentialsSecretNotFound, time.Minute, "%v", err), notReady)
+	case errors.Is(err, remote.ErrInvalidKubeconfig):
+		return result(waitFor(b2v1.ReasonInvalidSpec, 10*time.Minute, "%v", err), notReady)
+	case err != nil:
+		return result(waitFor(b2v1.ReasonRemoteClusterNotReady, time.Minute, "%v", err), notReady)
 	}
-	return res, err
+	now := metav1.NewTime(r.now())
+	rc.Status.ServerVersion = version
+	rc.Status.LastCheckedTime = &now
+	markReady(rc, "Connected to Kubernetes "+version)
+	return ctrl.Result{RequeueAfter: r.Options.ResyncPeriod}, nil
 }
 
 // SetupWithManager registers the controller.

@@ -116,7 +116,16 @@ Read [docs/security.md](docs/security.md) before running this on a shared cluste
 
 Use a **restricted application key**, not the account's master key: it can be scoped, rotated and revoked on its own. The master key is only needed for the Partner API (see below). `kubectl get clusterproviderconfigs` shows each config's key type, and a master key used for bucket management is flagged with a `MasterKeyInUse` warning.
 
-The operator's key needs `listBuckets`, `readBuckets`, `writeBuckets`, `deleteBuckets`, `listKeys`, `writeKeys` and `deleteKeys`. It also needs `read/writeBucketEncryption` and `read/writeBucketRetentions` for encryption and Object Lock, and `read/writeBucketReplications` for Cloud Replication, Give it every capability it will grant to tenant keys, too. The provider config's `Ready` condition message warns if core capabilities are missing.
+The operator's key needs:
+
+- `listBuckets`, `writeBuckets` and `deleteBuckets` to manage buckets.
+- `listKeys`, `writeKeys` and `deleteKeys` to manage keys.
+- `readBucketEncryption` and `writeBucketEncryption`, for default encryption.
+- `readBucketRetentions` and `writeBucketRetentions`, for Object Lock.
+- `readBucketReplications` and `writeBucketReplications`, for Cloud Replication. These are not in the v4 key reference, but B2 requires them.
+- Every capability it will grant to tenant keys.
+
+If any of the first five groups are missing, the provider config's `Ready` message says so.
 
 ## Configuration
 

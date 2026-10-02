@@ -37,54 +37,13 @@ func newBucket(ns, name, bucketName string) *b2v1.Bucket {
 	}
 }
 
-func bucketConds(b *b2v1.Bucket) func() []metav1.Condition {
-	return func() []metav1.Condition { return b.Status.Conditions }
-}
-
-func TestProviderConfigReady(t *testing.T) {
-	g := requireEnv(t)
-	pc := &b2v1.ClusterProviderConfig{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
-	eventuallyReason(g, pc, func() []metav1.Condition { return pc.Status.Conditions }, b2v1.ReasonReconciled)
-	g.Expect(pc.Status.AccountID).To(Equal(fakeB2.AccountID))
-	g.Expect(pc.Status.S3Region).To(Equal("us-west-004"))
-	g.Expect(pc.Status.Capabilities).To(ContainElement("writeKeys"))
-}
-
-func TestProviderConfigBadCredentials(t *testing.T) {
-	g := requireEnv(t)
-	ctx := context.Background()
-	suffix := newNamespace(t, false) // unique per run
-	g.Expect(k8s.Create(ctx, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "bad-creds-" + suffix, Namespace: operatorNS},
-		StringData: map[string]string{"applicationKeyId": "nope", "applicationKey": "nope"},
-	})).To(Succeed())
-	bad := &b2v1.ClusterProviderConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "bad-" + suffix},
-		Spec: b2v1.ClusterProviderConfigSpec{
-			APIURL:               fakeB2.URL(),
-			CredentialsSecretRef: b2v1.CredentialsSecretReference{Namespace: operatorNS, Name: "bad-creds-" + suffix},
-		},
-	}
-	missing := &b2v1.ClusterProviderConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "missing-" + suffix},
-		Spec: b2v1.ClusterProviderConfigSpec{
-			APIURL:               fakeB2.URL(),
-			CredentialsSecretRef: b2v1.CredentialsSecretReference{Namespace: operatorNS, Name: "does-not-exist"},
-		},
-	}
-	g.Expect(k8s.Create(ctx, bad)).To(Succeed())
-	g.Expect(k8s.Create(ctx, missing)).To(Succeed())
-	eventuallyReason(g, bad, func() []metav1.Condition { return bad.Status.Conditions }, b2v1.ReasonInvalidCredentials)
-	eventuallyReason(g, missing, func() []metav1.Condition { return missing.Status.Conditions }, b2v1.ReasonCredentialsNotFound)
-}
-
 func TestBucketDeniedWithoutPolicy(t *testing.T) {
 	g := requireEnv(t)
 	ns := newNamespace(t, false)
 	bkt := newBucket(ns, "data", ns+"-data")
 	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
 
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonPolicyDenied)
+	eventuallyReason(g, bkt, b2v1.ReasonPolicyDenied)
 	g.Expect(fakeB2.Bucket(ns + "-data")).To(BeNil())
 }
 
@@ -94,7 +53,7 @@ func TestBucketNameOutsidePolicyPattern(t *testing.T) {
 	bkt := newBucket(ns, "sneaky", "someone-elses-bucket")
 	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
 
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonPolicyDenied)
+	eventuallyReason(g, bkt, b2v1.ReasonPolicyDenied)
 	g.Expect(fakeB2.Bucket("someone-elses-bucket")).To(BeNil())
 }
 
@@ -105,11 +64,11 @@ func TestBucketCreateUpdateAndDriftCorrection(t *testing.T) {
 	name := ns + "-logs"
 	bkt := newBucket(ns, "logs", name)
 	bkt.Spec.BucketInfo = map[string]string{"team": "a"}
-	bkt.Spec.LifecycleRules = []b2v1.LifecycleRule{{FileNamePrefix: "tmp/", DaysFromHidingToDeleting: ptr[int32](1)}}
+	bkt.Spec.LifecycleRules = []b2v1.LifecycleRule{{FileNamePrefix: "tmp/", DaysFromHidingToDeleting: b2.Ptr[int32](1)}}
 	bkt.Spec.DefaultEncryption = &b2v1.DefaultEncryption{Mode: b2v1.EncryptionModeSSEB2}
 	g.Expect(k8s.Create(ctx, bkt)).To(Succeed())
 
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonReconciled)
+	eventuallyReason(g, bkt, b2v1.ReasonReconciled)
 	got := fakeB2.Bucket(name)
 	g.Expect(got).NotTo(BeNil())
 	g.Expect(bkt.Status.BucketID).To(Equal(got.BucketID))
@@ -152,7 +111,7 @@ func TestBucketObjectLock(t *testing.T) {
 	}
 	g.Expect(k8s.Create(ctx, bkt)).To(Succeed())
 
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonReconciled)
+	eventuallyReason(g, bkt, b2v1.ReasonReconciled)
 	g.Expect(bkt.Status.ObjectLockEnabled).To(BeTrue())
 	fl := fakeB2.Bucket(name).FileLockConfiguration.Value
 	g.Expect(fl.IsFileLockEnabled).To(BeTrue())
@@ -175,7 +134,7 @@ func TestBucketComplianceRetentionNeedsPolicy(t *testing.T) {
 		DefaultRetention: &b2v1.DefaultRetention{Mode: b2v1.RetentionModeCompliance, Duration: 1, Unit: "years"},
 	}
 	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonPolicyDenied)
+	eventuallyReason(g, bkt, b2v1.ReasonPolicyDenied)
 }
 
 func TestBucketExistingIsNotTakenOverWithoutAdoption(t *testing.T) {
@@ -192,21 +151,21 @@ func TestBucketExistingIsNotTakenOverWithoutAdoption(t *testing.T) {
 	bkt := newBucket(ns, "legacy", name)
 	bkt.Spec.BucketType = b2v1.BucketTypeAllPrivate
 	g.Expect(k8s.Create(ctx, bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonBucketExists)
+	eventuallyReason(g, bkt, b2v1.ReasonBucketAlreadyExists)
 	g.Expect(fakeB2.Bucket(name).BucketInfo).NotTo(HaveKey(OwnerInfoKey))
 
 	g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(bkt), bkt)).To(Succeed())
 	bkt.Spec.AdoptExisting = true
 	bkt.Spec.BucketInfo = map[string]string{"owner": "ops"}
 	g.Expect(k8s.Update(ctx, bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonReconciled)
+	eventuallyReason(g, bkt, b2v1.ReasonReconciled)
 	g.Expect(fakeB2.Bucket(name).BucketInfo).To(HaveKeyWithValue(OwnerInfoKey, string(bkt.UID)))
 
 	// A second resource cannot claim the same bucket, even with adoption.
 	other := newBucket(ns, "legacy-2", name)
 	other.Spec.AdoptExisting = true
 	g.Expect(k8s.Create(ctx, other)).To(Succeed())
-	eventuallyReason(g, other, bucketConds(other), b2v1.ReasonBucketOwnedElsewhere)
+	eventuallyReason(g, other, b2v1.ReasonBucketOwnedElsewhere)
 }
 
 func TestBucketNameTakenByAnotherAccount(t *testing.T) {
@@ -216,7 +175,7 @@ func TestBucketNameTakenByAnotherAccount(t *testing.T) {
 	fakeB2.ReserveBucketName(name)
 	bkt := newBucket(ns, "taken", name)
 	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonBucketNameUnavailable)
+	eventuallyReason(g, bkt, b2v1.ReasonBucketNameUnavailable)
 }
 
 func TestBucketDeletionRetainReleasesOwnership(t *testing.T) {
@@ -226,7 +185,7 @@ func TestBucketDeletionRetainReleasesOwnership(t *testing.T) {
 	name := ns + "-keep"
 	bkt := newBucket(ns, "keep", name)
 	g.Expect(k8s.Create(ctx, bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonReconciled)
+	eventuallyReason(g, bkt, b2v1.ReasonReconciled)
 
 	g.Expect(k8s.Delete(ctx, bkt)).To(Succeed())
 	g.Eventually(func() bool {
@@ -245,15 +204,15 @@ func TestBucketDeletionWaitsForItsKeys(t *testing.T) {
 	bkt := readyBucket(g, ns, "haskeys")
 	key := newKey(ns, "app", "haskeys", "readFiles")
 	g.Expect(k8s.Create(ctx, key)).To(Succeed())
-	eventuallyReason(g, key, keyConds(key), b2v1.ReasonReconciled)
+	eventuallyReason(g, key, b2v1.ReasonReconciled)
 	keyID := key.Status.KeyID
 	// A key that was never issued does not block deletion.
 	denied := newKey(ns, "denied", "haskeys", "shareFiles")
 	g.Expect(k8s.Create(ctx, denied)).To(Succeed())
-	eventuallyReason(g, denied, keyConds(denied), b2v1.ReasonPolicyDenied)
+	eventuallyReason(g, denied, b2v1.ReasonPolicyDenied)
 
 	g.Expect(k8s.Delete(ctx, bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonDeletionBlocked)
+	eventuallyReason(g, bkt, b2v1.ReasonDeletionBlocked)
 	g.Expect(fakeB2.Bucket(bkt.Spec.BucketName).BucketInfo).To(HaveKey(OwnerInfoKey), "must not release the bucket while keys exist")
 
 	g.Expect(k8s.Delete(ctx, key)).To(Succeed())
@@ -284,8 +243,8 @@ func TestCrossNamespacePrefixOverlap(t *testing.T) {
 	steal := newKey(attacker, "steal", "", "readFiles")
 	steal.Spec.BucketName = name
 	g.Expect(k8s.Create(ctx, steal)).To(Succeed())
-	eventuallyReason(g, steal, keyConds(steal), b2v1.ReasonPolicyDenied)
-	g.Expect(readyCondition(g, steal, keyConds(steal)).Message).To(ContainSubstring("outside namespace"))
+	eventuallyReason(g, steal, b2v1.ReasonPolicyDenied)
+	g.Expect(readyCondition(g, steal).Message).To(ContainSubstring("outside namespace"))
 	g.Expect(steal.Status.KeyID).To(BeEmpty())
 
 	// Once the victim retains and releases it, the attacker cannot adopt it.
@@ -296,13 +255,13 @@ func TestCrossNamespacePrefixOverlap(t *testing.T) {
 	adopt := newBucket(attacker, "adopt", name)
 	adopt.Spec.AdoptExisting = true
 	g.Expect(k8s.Create(ctx, adopt)).To(Succeed())
-	eventuallyReason(g, adopt, bucketConds(adopt), b2v1.ReasonBucketOwnedElsewhere)
+	eventuallyReason(g, adopt, b2v1.ReasonBucketOwnedElsewhere)
 	g.Expect(fakeB2.Bucket(name).BucketInfo).NotTo(HaveKey(OwnerInfoKey))
 
 	// Nor can it get a key for the released bucket.
 	touch(g, steal)
 	g.Eventually(func(g Gomega) {
-		c := readyCondition(g, steal, keyConds(steal))
+		c := readyCondition(g, steal)
 		g.Expect(c.Message).To(ContainSubstring("released by namespace"))
 	}, timeout, poll).Should(Succeed())
 }
@@ -315,11 +274,11 @@ func TestBucketDeletionDeleteWaitsForEmptyBucket(t *testing.T) {
 	bkt := newBucket(ns, "scratch", name)
 	bkt.Spec.DeletionPolicy = b2v1.DeletionPolicyDelete
 	g.Expect(k8s.Create(ctx, bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonReconciled)
+	eventuallyReason(g, bkt, b2v1.ReasonReconciled)
 
 	fakeB2.SetBucketHasFiles(name, true)
 	g.Expect(k8s.Delete(ctx, bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonDeletionBlocked)
+	eventuallyReason(g, bkt, b2v1.ReasonDeletionBlocked)
 	g.Expect(fakeB2.Bucket(name)).NotTo(BeNil())
 
 	fakeB2.SetBucketHasFiles(name, false)
@@ -337,7 +296,7 @@ func TestDeniedBucketDeletesWithoutProviderConfig(t *testing.T) {
 	bkt := newBucket(ns, "orphan-config", ns+"-x")
 	bkt.Spec.ProviderConfigRef.Name = "does-not-exist"
 	g.Expect(k8s.Create(ctx, bkt)).To(Succeed())
-	eventuallyReason(g, bkt, bucketConds(bkt), b2v1.ReasonProviderNotReady)
+	eventuallyReason(g, bkt, b2v1.ReasonProviderConfigNotReady)
 
 	g.Expect(k8s.Delete(ctx, bkt)).To(Succeed())
 	g.Eventually(func() bool {
@@ -364,4 +323,23 @@ func TestBucketNameValidation(t *testing.T) {
 	}
 }
 
-func ptr[T any](v T) *T { return &v }
+func TestBucketCannotUsePartnerConfig(t *testing.T) {
+	g := requireEnv(t)
+	ns := newNamespace(t, true)
+	bkt := newBucket(ns, "via-partner", ns+"-via-partner")
+	bkt.Spec.ProviderConfigRef.Name = partnerConfig
+	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
+	eventuallyReason(g, bkt, b2v1.ReasonInvalidSpec)
+	g.Expect(readyCondition(g, bkt).Message).To(ContainSubstring("Partner API config"))
+	g.Expect(fakeB2.Bucket(ns + "-via-partner")).To(BeNil())
+}
+
+func TestUnencryptedBucketNeedsPolicy(t *testing.T) {
+	g := requireEnv(t)
+	ns := newNamespace(t, true)
+	bkt := newBucket(ns, "plain", ns+"-plain")
+	bkt.Spec.DefaultEncryption = &b2v1.DefaultEncryption{Mode: b2v1.EncryptionModeNone}
+	g.Expect(k8s.Create(context.Background(), bkt)).To(Succeed())
+	eventuallyReason(g, bkt, b2v1.ReasonPolicyDenied)
+	g.Expect(fakeB2.Bucket(ns + "-plain")).To(BeNil())
+}

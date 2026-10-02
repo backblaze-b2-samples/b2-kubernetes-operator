@@ -17,7 +17,6 @@ limitations under the License.
 package b2
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -35,16 +34,21 @@ const (
 	CodeUnauthorized               = "unauthorized"
 	CodeBadAuthToken               = "bad_auth_token"
 	CodeExpiredAuthToken           = "expired_auth_token"
-	CodeUnsupported                = "unsupported"
 	CodeConflict                   = "conflict"
 	CodeFileLockConflict           = "file_lock_conflict"
-	CodeTransactionCapExceeded     = "transaction_cap_exceeded"
 	CodeTooManyRequests            = "too_many_requests"
 	CodeServiceUnavailable         = "service_unavailable"
-	CodeEmailNotVerified           = "email_not_verified"
-	CodeNoPaymentHistory           = "no_payment_history"
-	CodeRestrictedBucketConflict   = "restricted_bucket_conflict"
-	CodeSourceReplicationConflict  = "source_replication_conflict"
+
+	// Cloud Replication needs a verified email and payment history.
+	CodeEmailNotVerified = "email_not_verified"
+	CodeNoPaymentHistory = "no_payment_history"
+
+	// Partner API.
+	CodeInvalidEmail           = "invalid_email"
+	CodeInvalidGroupID         = "invalid_group_id"
+	CodeInvalidRegion          = "invalid_region"
+	CodeTooManyMembers         = "too_many_members"
+	CodeInvalidMemberAccountID = "invalid_member_account_id"
 )
 
 // APIError is an error response from the B2 Native API.
@@ -129,33 +133,6 @@ func (e *CredentialsError) Error() string {
 }
 
 func (e *CredentialsError) Unwrap() error { return e.Err }
-
-// Revision is a bucket revision. B2 documents it as an integer; it is decoded
-// leniently from either a JSON number or a string.
-type Revision int64
-
-func (r *Revision) UnmarshalJSON(b []byte) error {
-	if string(b) == "null" {
-		*r = 0
-		return nil
-	}
-	var n json.Number
-	if len(b) > 0 && b[0] == '"' {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return err
-		}
-		n = json.Number(s)
-	} else if err := json.Unmarshal(b, &n); err != nil {
-		return err
-	}
-	v, err := strconv.ParseInt(string(n), 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid bucket revision %q: %w", string(n), err)
-	}
-	*r = Revision(v)
-	return nil
-}
 
 func parseRetryAfter(h string) time.Duration {
 	if h == "" {
