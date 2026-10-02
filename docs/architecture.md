@@ -115,5 +115,5 @@ B2 replaces a bucket's whole `replicationConfiguration` on every update, which c
 | --- | --- | --- |
 | Unit | B2 client, policy, kubeconfig handling, against the fake | `go test ./internal/b2/... ./internal/policy/... ./internal/remote/...` |
 | Integration | All controllers in a real API server (envtest) against the fake over HTTP, plus a second API server as a remote cluster | `make test` |
-| End to end | Release image and Helm chart in kind, with the fake deployed in-cluster | `make test-e2e` |
+| End to end | Release image and Helm chart in kind, with the fake deployed in-cluster; key Secrets delivered to a second kind cluster through a Secrets-only ServiceAccount | `make test-e2e` |
 | Live | All controllers in envtest against the real B2 API, checked by reading B2 directly | `make test-live` |

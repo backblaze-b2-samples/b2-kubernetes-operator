@@ -61,10 +61,13 @@ test: generate fmt vet setup-envtest ## Run unit and integration (envtest) tests
 		go test -race -coverpkg=./internal/... -coverprofile cover.out ./...
 
 KIND_CLUSTER ?= b2-operator-e2e
+# A second cluster plays a customer's cluster that key Secrets are delivered to.
+KIND_REMOTE_CLUSTER ?= $(KIND_CLUSTER)-remote
 
 .PHONY: e2e-setup
-e2e-setup: ## Create a kind cluster and install the operator and the fake B2 API into it.
+e2e-setup: ## Create kind clusters and install the operator and the fake B2 API into one of them.
 	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --name $(KIND_CLUSTER) --wait 120s
+	kind get clusters | grep -qx $(KIND_REMOTE_CLUSTER) || kind create cluster --name $(KIND_REMOTE_CLUSTER) --wait 120s
 	docker build -t b2-kubernetes-operator:e2e .
 	docker build --target b2fake -t b2fake:e2e .
 	kind load docker-image --name $(KIND_CLUSTER) b2-kubernetes-operator:e2e b2fake:e2e
@@ -82,7 +85,10 @@ e2e-setup: ## Create a kind cluster and install the operator and the fake B2 API
 
 .PHONY: test-e2e
 test-e2e: e2e-setup ## Run end-to-end tests against a kind cluster.
-	KUBECONTEXT=kind-$(KIND_CLUSTER) go test -tags e2e -timeout 20m -count=1 -v ./test/e2e/...
+	# The operator reaches the second cluster over the kind Docker network.
+	KUBECONTEXT=kind-$(KIND_CLUSTER) REMOTE_KUBECONTEXT=kind-$(KIND_REMOTE_CLUSTER) \
+		REMOTE_API_SERVER=https://$$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' $(KIND_REMOTE_CLUSTER)-control-plane):6443 \
+		go test -tags e2e -timeout 20m -count=1 -v ./test/e2e/...
 
 .PHONY: test-live
 test-live: setup-envtest ## Run controllers against the real B2 API (needs B2_LIVE_* credentials; see test/live/README.md).
@@ -90,8 +96,9 @@ test-live: setup-envtest ## Run controllers against the real B2 API (needs B2_LI
 		go test -tags live -count=1 -timeout 45m -v $(GOTESTFLAGS) ./test/live/...
 
 .PHONY: e2e-teardown
-e2e-teardown: ## Delete the e2e kind cluster.
+e2e-teardown: ## Delete the e2e kind clusters.
 	kind delete cluster --name $(KIND_CLUSTER)
+	kind delete cluster --name $(KIND_REMOTE_CLUSTER)
 
 .PHONY: helm-lint
 helm-lint: ## Lint the Helm chart.

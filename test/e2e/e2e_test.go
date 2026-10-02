@@ -35,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -47,14 +48,25 @@ const (
 	poll       = time.Second
 )
 
+// newClient is a client for the operator's cluster.
 func newClient(t *testing.T) client.Client {
 	t.Helper()
+	return newClientFor(t, restConfig(t, os.Getenv("KUBECONTEXT")))
+}
+
+func restConfig(t *testing.T, context string) *rest.Config {
+	t.Helper()
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	overrides := &clientcmd.ConfigOverrides{CurrentContext: os.Getenv("KUBECONTEXT")}
+	overrides := &clientcmd.ConfigOverrides{CurrentContext: context}
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
 	if err != nil {
-		t.Fatalf("loading kubeconfig: %v", err)
+		t.Fatalf("loading kubeconfig for context %q: %v", context, err)
 	}
+	return cfg
+}
+
+func newClientFor(t *testing.T, cfg *rest.Config) client.Client {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = b2v1.AddToScheme(scheme)
