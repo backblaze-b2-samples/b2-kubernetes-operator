@@ -64,9 +64,15 @@ jobs:
           awk -v v="## ${version} " 'index($0, v) == 1 {on = 1; next} /^## / {on = 0} on' CHANGELOG.md > notes.md
           test -s notes.md || { echo "CHANGELOG.md has no section for ${version}"; exit 1; }
 
-      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          body_path: notes.md
-          files: |
-            crds.yaml
-            b2-kubernetes-operator-*.tgz
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --notes-file notes.md
+            gh release upload "${GITHUB_REF_NAME}" crds.yaml b2-kubernetes-operator-*.tgz --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" crds.yaml b2-kubernetes-operator-*.tgz \
+              --title "${GITHUB_REF_NAME}" --notes-file notes.md --verify-tag
+          fi
